@@ -28,6 +28,16 @@ pub struct Renderer {
     recoil_velocity: f32,
 }
 
+#[derive(Copy, Clone)]
+enum WallBlockType {
+    Brick,
+    Cobblestone,
+    Mossy,
+    Sandstone,
+    WoodPlanks,
+    NetherBrick,
+}
+
 impl Renderer {
     pub fn new() -> Self {
         Self {
@@ -93,15 +103,9 @@ impl Renderer {
         h: f32,
         bullet_marks: &[BulletMark],
     ) {
-        // Ceiling (very dark blue-black) and floor (slightly lighter)
-        draw_rectangle(0.0, 0.0, w, h * 0.5, Color::new(0.04, 0.04, 0.07, 1.0));
-        draw_rectangle(
-            0.0,
-            h * 0.5,
-            w,
-            h * 0.5,
-            Color::new(0.14, 0.14, 0.16, 1.0),
-        );
+        // Minecraft-inspired sky and grass horizon.
+        draw_rectangle(0.0, 0.0, w, h * 0.5, Color::new(0.40, 0.70, 0.98, 1.0));
+        draw_rectangle(0.0, h * 0.5, w, h * 0.5, Color::new(0.35, 0.67, 0.27, 1.0));
 
         let cols = w as usize;
         let mut z_buf = vec![f32::MAX; cols];
@@ -128,26 +132,19 @@ impl Renderer {
             let fog = (1.0 - perp / 16.0).clamp(0.0, 1.0);
             let side_dim = if hit_y_side { 0.65 } else { 1.0 };
             let b = (fog * side_dim * 0.85 + 0.12).min(1.0);
-
-            // Classic Maze Wars monochrome walls — slight blue tint
-            draw_line(
-                col as f32,
-                top,
-                col as f32,
-                top + wall_h,
-                1.0,
-                Color::new(b * 0.88, b * 0.90, b, 1.0),
-            );
+            let wall_frac = if !hit_y_side {
+                let hit = player.y + perp * rdy;
+                hit - hit.floor()
+            } else {
+                let hit = player.x + perp * rdx;
+                hit - hit.floor()
+            };
+            let block = Self::wall_block_type(mx, my);
+            let wall_color = Self::sample_block_color(block, wall_frac, top, wall_h, h);
+            draw_line(col as f32, top, col as f32, top + wall_h, 1.0, Color::new(wall_color.r * b, wall_color.g * b, wall_color.b * b, 1.0));
 
             // Bullet mark overlay — dark burn mark on matching columns
             if !bullet_marks.is_empty() {
-                let wall_frac = if !hit_y_side {
-                    let hit = player.y + perp * rdy;
-                    hit - hit.floor()
-                } else {
-                    let hit = player.x + perp * rdx;
-                    hit - hit.floor()
-                };
                 for mark in bullet_marks {
                     if mark.cell_x == mx && mark.cell_y == my && mark.hit_y_side == hit_y_side {
                         let d = (wall_frac - mark.wall_frac).abs();
@@ -169,7 +166,7 @@ impl Renderer {
             }
         }
 
-        // Draw "eye" sprites for remote players
+        // Draw blocky "Steve-like" sprites for remote players.
         self.draw_sprites(player, remote_players, &z_buf, w, h);
 
         // Muzzle flash overlay
@@ -282,39 +279,82 @@ impl Renderer {
                 continue;
             }
 
-            // Size based on distance
-            let sprite_h = (h / dist * 0.75).clamp(8.0, h * 0.85);
-            let sprite_w = sprite_h * 0.65;
+            // Steve proportions: 16w x 32h Minecraft units
+            // head=8x8, body=8x12, arms=4x12 each side, legs=4x12 each
+            let sprite_h = (h / dist * 0.85).clamp(10.0, h * 0.88);
+            let u = (sprite_h / 32.0).max(0.5); // 1 Minecraft unit in pixels
+            let sprite_w = u * 16.0;
             let top = (h - sprite_h) * 0.5;
-            let left = screen_x as f32 - sprite_w * 0.5;
+            let center = screen_x as f32;
 
-            // Face background (skin tone)
-            draw_rectangle(left, top, sprite_w, sprite_h, Color::new(0.85, 0.78, 0.55, 1.0));
+            // Palette
+            let skin  = Color::new(0.90, 0.74, 0.56, 1.0);
+            let hair  = Color::new(0.33, 0.20, 0.08, 1.0);
+            let shirt = Color::new(0.20, 0.50, 0.85, 1.0);
+            let shirt_dark = Color::new(0.14, 0.38, 0.70, 1.0);
+            let pants = Color::new(0.20, 0.24, 0.58, 1.0);
+            let pants_dark = Color::new(0.14, 0.17, 0.44, 1.0);
+            let shoe  = Color::new(0.22, 0.14, 0.06, 1.0);
 
-            // Two eyes — the signature Maze Wars look
-            let eye_w = sprite_w * 0.22;
-            let eye_h = sprite_h * 0.28;
-            let eye_y = top + sprite_h * 0.28;
-            let left_eye_x = left + sprite_w * 0.14;
-            let right_eye_x = left + sprite_w * 0.55;
+            // ── HEAD (8x8 units) ──────────────────────────────────────────────
+            let head_w = u * 8.0;
+            let head_h = u * 8.0;
+            let hx = center - head_w * 0.5;
+            // Face
+            draw_rectangle(hx, top, head_w, head_h, skin);
+            // Hair top + sides
+            draw_rectangle(hx, top, head_w, u * 2.5, hair);
+            draw_rectangle(hx, top, u * 1.0, head_h, hair);
+            draw_rectangle(hx + head_w - u, top, u, head_h, hair);
+            // Eyes (white)
+            draw_rectangle(hx + u * 1.5, top + u * 2.5, u * 1.8, u * 1.8, WHITE);
+            draw_rectangle(hx + u * 4.7, top + u * 2.5, u * 1.8, u * 1.8, WHITE);
+            // Pupils (blue)
+            draw_rectangle(hx + u * 2.0, top + u * 3.0, u * 0.9, u * 0.9, Color::new(0.10, 0.20, 0.75, 1.0));
+            draw_rectangle(hx + u * 5.2, top + u * 3.0, u * 0.9, u * 0.9, Color::new(0.10, 0.20, 0.75, 1.0));
+            // Mouth
+            draw_rectangle(hx + u * 2.0, top + u * 5.8, u * 1.2, u * 0.5, Color::new(0.48, 0.22, 0.10, 1.0));
+            draw_rectangle(hx + u * 4.8, top + u * 5.8, u * 1.2, u * 0.5, Color::new(0.48, 0.22, 0.10, 1.0));
+            // Nose bridge
+            draw_rectangle(hx + u * 3.2, top + u * 3.5, u * 1.6, u * 1.2, Color::new(0.82, 0.63, 0.46, 1.0));
 
-            // Eye whites
-            draw_rectangle(left_eye_x, eye_y, eye_w, eye_h, WHITE);
-            draw_rectangle(right_eye_x, eye_y, eye_w, eye_h, WHITE);
+            // ── BODY (8x12 units) ─────────────────────────────────────────────
+            let body_y = top + head_h;
+            let body_w = u * 8.0;
+            let body_h = u * 12.0;
+            let bx = center - body_w * 0.5;
+            draw_rectangle(bx, body_y, body_w, body_h, shirt);
+            // Shirt shading / pixel detail
+            draw_rectangle(bx, body_y, body_w, u * 1.0, shirt_dark);
+            draw_rectangle(bx + body_w - u, body_y, u, body_h, shirt_dark);
+            // Belt
+            draw_rectangle(bx, body_y + body_h - u * 2.0, body_w, u, Color::new(0.36, 0.24, 0.10, 1.0));
 
-            // Pupils (slightly off-center, looking at you)
-            let pupil_w = eye_w * 0.55;
-            let pupil_h = eye_h * 0.65;
-            let pupil_ox = (eye_w - pupil_w) * 0.5;
-            let pupil_oy = (eye_h - pupil_h) * 0.5;
-            draw_rectangle(left_eye_x + pupil_ox, eye_y + pupil_oy, pupil_w, pupil_h, BLACK);
-            draw_rectangle(right_eye_x + pupil_ox, eye_y + pupil_oy, pupil_w, pupil_h, BLACK);
+            // ── LEFT ARM (4x12, attached left of body) ────────────────────────
+            let arm_w = u * 4.0;
+            let arm_h = u * 12.0;
+            draw_rectangle(bx - arm_w, body_y, arm_w, arm_h, skin);
+            draw_rectangle(bx - arm_w, body_y, arm_w, u, Color::new(0.78, 0.62, 0.44, 1.0));
+            draw_rectangle(bx - arm_w, body_y + arm_h - u * 2.0, arm_w, u * 2.0, shoe);
 
-            // Mouth (a grim line)
-            let mouth_y = top + sprite_h * 0.72;
-            let mouth_w = sprite_w * 0.5;
-            let mouth_x = left + (sprite_w - mouth_w) * 0.5;
-            draw_line(mouth_x, mouth_y, mouth_x + mouth_w, mouth_y, 2.0_f32.max(sprite_h * 0.025), DARKBROWN);
+            // ── RIGHT ARM (4x12, attached right of body) ──────────────────────
+            draw_rectangle(bx + body_w, body_y, arm_w, arm_h, skin);
+            draw_rectangle(bx + body_w, body_y, arm_w, u, Color::new(0.78, 0.62, 0.44, 1.0));
+            draw_rectangle(bx + body_w, body_y + arm_h - u * 2.0, arm_w, u * 2.0, shoe);
+
+            // ── LEGS (4x12 each) ──────────────────────────────────────────────
+            let leg_h = u * 12.0;
+            let leg_y = body_y + body_h;
+            // Left leg
+            draw_rectangle(bx, leg_y, u * 4.0, leg_h, pants);
+            draw_rectangle(bx, leg_y, u * 4.0, u, pants_dark);
+            draw_rectangle(bx, leg_y + leg_h - u * 2.0, u * 4.0, u * 2.0, shoe);
+            // Right leg
+            draw_rectangle(bx + u * 4.0, leg_y, u * 4.0, leg_h, pants_dark);
+            draw_rectangle(bx + u * 4.0, leg_y, u * 4.0, u, pants);
+            draw_rectangle(bx + u * 4.0, leg_y + leg_h - u * 2.0, u * 4.0, u * 2.0, shoe);
+
+            let left = center - sprite_w * 0.5; // used by health outline below
 
             // Health-colored outline
             let hp_color = if remote.health > 60 {
@@ -447,12 +487,21 @@ impl Renderer {
         for row in 0..map.height {
             for col in 0..map.width {
                 if map.is_wall(col as f32, row as f32) {
+                    let block = Self::wall_block_type(col as i32, row as i32);
+                    let wall = match block {
+                        WallBlockType::Brick      => Color::new(0.62, 0.26, 0.23, 1.0),
+                        WallBlockType::Cobblestone=> Color::new(0.50, 0.50, 0.54, 1.0),
+                        WallBlockType::Mossy      => Color::new(0.36, 0.48, 0.30, 1.0),
+                        WallBlockType::Sandstone  => Color::new(0.74, 0.66, 0.42, 1.0),
+                        WallBlockType::WoodPlanks => Color::new(0.68, 0.52, 0.30, 1.0),
+                        WallBlockType::NetherBrick=> Color::new(0.34, 0.10, 0.10, 1.0),
+                    };
                     draw_rectangle(
                         ox + col as f32 * cell,
                         oy + row as f32 * cell,
                         cell,
                         cell,
-                        Color::new(0.55, 0.55, 0.65, 1.0),
+                        wall,
                     );
                 }
             }
@@ -541,6 +590,51 @@ impl Renderer {
     fn draw_messages(&self, messages: &[String]) {
         for (i, msg) in messages.iter().enumerate() {
             draw_text(msg, 14.0, 22.0 + i as f32 * 20.0, 17.0, MAGENTA);
+        }
+    }
+
+    fn wall_block_type(x: i32, y: i32) -> WallBlockType {
+        let v = ((x * 31 + y * 17).abs() % 6) as i32;
+        match v {
+            0 => WallBlockType::Brick,
+            1 => WallBlockType::Cobblestone,
+            2 => WallBlockType::Mossy,
+            3 => WallBlockType::Sandstone,
+            4 => WallBlockType::WoodPlanks,
+            _ => WallBlockType::NetherBrick,
+        }
+    }
+
+    fn sample_block_color(block: WallBlockType, wall_frac: f32, top: f32, wall_h: f32, screen_h: f32) -> Color {
+        let u = wall_frac.clamp(0.0, 0.999);
+        let row = (((top + wall_h * 0.5) / screen_h) * 16.0).floor() as i32;
+        let col = (u * 16.0).floor() as i32;
+        match block {
+            WallBlockType::Brick => {
+                let mortar = row % 4 == 0 || col % 4 == 0;
+                if mortar { Color::new(0.52, 0.44, 0.38, 1.0) } else { Color::new(0.68, 0.30, 0.26, 1.0) }
+            }
+            WallBlockType::Cobblestone => {
+                let patch = ((row * 7 + col * 11).abs() % 5) as f32;
+                let g = 0.45 + patch * 0.03;
+                Color::new(g, g, g + 0.03, 1.0)
+            }
+            WallBlockType::Mossy => {
+                let moss = ((row + col) % 3) == 0;
+                if moss { Color::new(0.34, 0.52, 0.32, 1.0) } else { Color::new(0.43, 0.46, 0.40, 1.0) }
+            }
+            WallBlockType::Sandstone => {
+                let seam = row % 5 == 0;
+                if seam { Color::new(0.62, 0.57, 0.36, 1.0) } else { Color::new(0.75, 0.68, 0.45, 1.0) }
+            }
+            WallBlockType::WoodPlanks => {
+                let grain = (row + col / 2) % 3 == 0;
+                if grain { Color::new(0.60, 0.44, 0.24, 1.0) } else { Color::new(0.72, 0.56, 0.32, 1.0) }
+            }
+            WallBlockType::NetherBrick => {
+                let mortar = row % 4 == 0 || col % 4 == 0;
+                if mortar { Color::new(0.20, 0.06, 0.06, 1.0) } else { Color::new(0.34, 0.10, 0.10, 1.0) }
+            }
         }
     }
 }
