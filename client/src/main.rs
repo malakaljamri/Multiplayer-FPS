@@ -443,6 +443,11 @@ async fn game_main() {
 
     let map = Map::generate(seed, difficulty);
     let mut prediction   = PredictionLocal::new();
+    // (0,0) is always a border wall — initialize at a real floor tile so
+    // collision checks don't block movement before the first server snapshot.
+    let (sx, sy) = map.spawn_points.first().copied().unwrap_or((1.5, 1.5));
+    prediction.local_state.x = sx;
+    prediction.local_state.y = sy;
     prediction.map       = Some(map);
     let mut interpolation = InterpolationRemote::new(100);
     let mut renderer     = Renderer::new();
@@ -490,7 +495,9 @@ async fn game_main() {
             if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left)   { input.strafe_left  = true; }
             if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right)  { input.strafe_right = true; }
             if is_mouse_button_pressed(MouseButton::Left)               { input.shoot        = true; }
-            input.turn_delta = -mdx * sensitivity;
+            // mouse_delta_position returns a 0..1 normalized fraction of screen width.
+            // Multiply by 2π so a full screen-width swipe = 360° at sensitivity 1.0.
+            input.turn_delta = -mdx * sensitivity * std::f32::consts::TAU;
 
             let has_input = input.forward || input.backward || input.strafe_left
                 || input.strafe_right || input.shoot || input.turn_delta.abs() > 0.0001;
