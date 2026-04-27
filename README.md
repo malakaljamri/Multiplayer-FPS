@@ -42,12 +42,12 @@ RUST_LOG=info cargo run --bin client
 ## Project Roadmap
 
 - [x] Phase 1 — Project Skeleton
-- [ ] Phase 2 — UDP Communication Layer
-- [ ] Phase 3 — Server Authoritative Game Core
-- [ ] Phase 4 — Client Prediction & Interpolation
-- [ ] Phase 5 — Maze Generation
-- [ ] Phase 6 — Rendering Engine
-- [ ] Phase 7 — Shooting & Hit Detection
+- [x] Phase 2 — UDP Communication Layer
+- [x] Phase 3 — Server Authoritative Game Core
+- [x] Phase 4 — Client Prediction & Interpolation
+- [x] Phase 5 — Maze Generation
+- [x] Phase 6 — Rendering Engine
+- [x] Phase 7 — Shooting & Hit Detection
 - [ ] Phase 8 — Optimization & Stability
 
 ## License
