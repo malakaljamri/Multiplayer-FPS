@@ -15,11 +15,11 @@ fn main() {
     env_logger::init();
 
     let bind_addr = format!("0.0.0.0:{}", DEFAULT_SERVER_PORT);
-    info!("Starting server on {}", bind_addr);
+    info!("Starting Maze Wars server on {}", bind_addr);
 
     let mut socket = UdpSocket::bind(&bind_addr).expect("Failed to bind server socket");
     info!(
-        "Server listening on {} (non-blocking, tick={:.1}ms)",
+        "Server listening on {} (tick={:.1}ms)",
         socket.local_addr(),
         TICK_DURATION * 1000.0
     );
@@ -28,23 +28,20 @@ fn main() {
     use shared::maze::Difficulty;
 
     let seed: u64 = rand::thread_rng().gen();
-    let difficulty = Difficulty::Easy;
+    let difficulty = Difficulty::Easy; // Level 1 starts Easy
     let mut game = GameState::new(seed, difficulty);
-    // Map socket address → player id for quick lookup.
     let mut addr_to_id: HashMap<SocketAddr, u32> = HashMap::new();
     let mut next_player_id: u32 = 1;
 
     let tick_duration = Duration::from_secs_f64(TICK_DURATION);
     let mut last_tick = Instant::now();
 
-    // --- Main loop ---
     loop {
-        // ---- 1. Drain all incoming packets ----
+        // ---- 1. Drain incoming packets ----
         loop {
             match socket.recv_packet() {
                 Ok(Some((header, packet, src))) => {
                     match packet {
-                        // ---- Connect ----
                         Packet::Connect { player_name } => {
                             if addr_to_id.contains_key(&src) {
                                 warn!("Duplicate connect from {} — ignoring", src);
@@ -57,10 +54,11 @@ fn main() {
                             addr_to_id.insert(src, player_id);
 
                             info!(
-                                "Player '{}' connected from {} → id {} (seq={})",
-                                player_name, src, player_id, header.sequence
+                                "Player '{}' connected from {} → id={} level={} (seq={})",
+                                player_name, src, player_id, game.level, header.sequence
                             );
 
+                            // Send Accept with current level's seed/difficulty
                             if let Err(e) = socket.send_packet(
                                 Packet::Accept {
                                     player_id,
@@ -71,9 +69,20 @@ fn main() {
                             ) {
                                 warn!("Failed to send Accept to {}: {}", src, e);
                             }
+
+                            // If not on level 1, tell them the current level
+                            if game.level > 1 {
+                                let _ = socket.send_packet(
+                                    Packet::LevelChange {
+                                        seed: game.seed,
+                                        difficulty: game.difficulty,
+                                        level: game.level,
+                                    },
+                                    src,
+                                );
+                            }
                         }
 
-                        // ---- Disconnect ----
                         Packet::Disconnect => {
                             if let Some(id) = addr_to_id.remove(&src) {
                                 game.remove_player(id);
@@ -81,7 +90,6 @@ fn main() {
                             }
                         }
 
-                        // ---- Input ----
                         Packet::Input {
                             input,
                             input_sequence,
@@ -91,7 +99,6 @@ fn main() {
                             }
                         }
 
-                        // ---- Ping ----
                         Packet::Ping => {
                             let _ = socket.send_packet(Packet::Pong, src);
                         }
@@ -99,7 +106,7 @@ fn main() {
                         _ => {}
                     }
                 }
-                Ok(None) => break, // No more data.
+                Ok(None) => break,
                 Err(e) => {
                     log::error!("recv error: {}", e);
                     break;
@@ -113,18 +120,9 @@ fn main() {
             last_tick = now;
             game.tick();
 
-            // ---- 3. Broadcast state snapshot ----
-            let snapshot = game.snapshot();
-            let tick = game.tick;
-            let state_packet = Packet::StateSnapshot {
-                tick,
-                players: snapshot,
-            };
-
-            // Collect addresses first to avoid borrow conflict.
             let addrs: Vec<SocketAddr> = addr_to_id.keys().copied().collect();
 
-            // Broadcast ServerMessages
+            // ---- 3. Broadcast server messages ----
             if !game.message_queue.is_empty() {
                 for msg in game.message_queue.drain(..) {
                     let msg_packet = Packet::ServerMessage { text: msg };
@@ -134,13 +132,35 @@ fn main() {
                 }
             }
 
+            // ---- 4. Broadcast level change if needed ----
+            if let Some(change) = game.pending_level_change.take() {
+                info!(
+                    "Level advance → level={} difficulty={:?} seed={}",
+                    change.level, change.difficulty, change.seed
+                );
+                let lc = Packet::LevelChange {
+                    seed: change.seed,
+                    difficulty: change.difficulty,
+                    level: change.level,
+                };
+                for addr in &addrs {
+                    let _ = socket.send_packet(lc.clone(), *addr);
+                }
+            }
+
+            // ---- 5. Broadcast state snapshot ----
+            let snapshot = game.snapshot();
+            let state_packet = Packet::StateSnapshot {
+                tick: game.tick,
+                players: snapshot,
+            };
+
             for addr in addrs {
                 if let Err(e) = socket.send_packet(state_packet.clone(), addr) {
                     warn!("Failed to send snapshot to {}: {}", addr, e);
                 }
             }
         } else {
-            // Sleep until next tick (avoid busy-spin).
             let remaining = tick_duration.saturating_sub(now.duration_since(last_tick));
             if remaining > Duration::from_micros(500) {
                 std::thread::sleep(Duration::from_micros(500));

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Maximum size of a single UDP packet payload in bytes.
-pub const MAX_PACKET_SIZE: usize = 1024;
+pub const MAX_PACKET_SIZE: usize = 2048;
 
 /// Default server port.
 pub const DEFAULT_SERVER_PORT: u16 = 7878;
@@ -20,7 +20,7 @@ pub const TICK_RATE: u32 = 60;
 pub const TICK_DURATION: f64 = 1.0 / TICK_RATE as f64;
 
 /// Player movement speed (units per second).
-pub const MOVE_SPEED: f32 = 3.0;
+pub const MOVE_SPEED: f32 = 1.2;
 
 /// Player turning speed (radians per second).
 pub const TURN_SPEED: f32 = 3.0;
@@ -53,9 +53,11 @@ pub struct PlayerState {
 pub struct InputData {
     pub forward: bool,
     pub backward: bool,
-    pub turn_left: bool,
-    pub turn_right: bool,
+    pub strafe_left: bool,
+    pub strafe_right: bool,
     pub shoot: bool,
+    /// Angle delta in radians from mouse movement this frame.
+    pub turn_delta: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +111,14 @@ pub enum Packet {
     // -- Keep-alive --
     Ping,
     Pong,
+
+    // -- Level progression --
+    /// Server → Client: advance to a new level with a new maze.
+    LevelChange {
+        seed: u64,
+        difficulty: Difficulty,
+        level: u8,
+    },
 
     // -- Gameplay --
     /// Client → Server: movement input for a frame.
@@ -240,9 +250,10 @@ mod tests {
                 input: InputData {
                     forward: true,
                     backward: false,
-                    turn_left: false,
-                    turn_right: true,
+                    strafe_left: false,
+                    strafe_right: true,
                     shoot: true,
+                    turn_delta: 0.05,
                 },
                 input_sequence: 10,
             },
@@ -256,8 +267,9 @@ mod tests {
             } => {
                 assert!(input.forward);
                 assert!(!input.backward);
-                assert!(input.turn_right);
+                assert!(input.strafe_right);
                 assert!(input.shoot);
+                assert!((input.turn_delta - 0.05).abs() < 0.0001);
                 assert_eq!(input_sequence, 10);
             }
             _ => panic!("wrong variant"),
@@ -314,6 +326,28 @@ mod tests {
         match decoded.payload {
             Packet::ServerMessage { text } => {
                 assert_eq!(text, "Hello World");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn round_trip_level_change() {
+        let wp = WirePacket {
+            header: PacketHeader::new(200),
+            payload: Packet::LevelChange {
+                seed: 99999,
+                difficulty: Difficulty::Hard,
+                level: 3,
+            },
+        };
+        let bytes = serialize(&wp).expect("serialize");
+        let decoded = deserialize(&bytes).expect("deserialize");
+        match decoded.payload {
+            Packet::LevelChange { seed, difficulty, level } => {
+                assert_eq!(seed, 99999);
+                assert_eq!(difficulty, Difficulty::Hard);
+                assert_eq!(level, 3);
             }
             _ => panic!("wrong variant"),
         }

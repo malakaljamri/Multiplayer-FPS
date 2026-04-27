@@ -7,6 +7,9 @@ use shared::protocol::{
     InputData, PlayerState, MAX_HEALTH, TICK_DURATION, WEAPON_COOLDOWN_TICKS, WEAPON_DAMAGE,
 };
 
+/// Frags needed to advance from each level.
+const FRAGS_TO_ADVANCE: [u32; 3] = [5, 10, 15];
+
 /// Server-side representation of a connected player.
 #[allow(dead_code)]
 pub struct Player {
@@ -17,10 +20,18 @@ pub struct Player {
     pub y: f32,
     pub angle: f32,
     pub health: u8,
+    pub frags: u32,
     /// Last input sequence processed for this player.
     pub last_input_seq: u32,
     /// The server tick when the player last shot.
     pub last_shot_tick: u32,
+}
+
+/// Pending level change information.
+pub struct LevelChangePending {
+    pub seed: u64,
+    pub difficulty: Difficulty,
+    pub level: u8,
 }
 
 /// Authoritative game state managed by the server.
@@ -31,9 +42,29 @@ pub struct GameState {
     pub difficulty: Difficulty,
     pub map: Map,
     pub message_queue: Vec<String>,
+    /// Current level (1-based: 1, 2, 3).
+    pub level: u8,
+    /// Total frags across all players since last level change.
+    pub total_frags: u32,
+    /// Set when a level advance is triggered; cleared by the server loop.
+    pub pending_level_change: Option<LevelChangePending>,
 }
 
 impl GameState {
+    fn collides_with_other_player(
+        others: &[(f32, f32)],
+        x: f32,
+        y: f32,
+        player_radius: f32,
+    ) -> bool {
+        let min_dist_sq = (player_radius * 2.0).powi(2);
+        others.iter().any(|(ox, oy)| {
+            let dx = x - *ox;
+            let dy = y - *oy;
+            (dx * dx + dy * dy) < min_dist_sq
+        })
+    }
+
     pub fn new(seed: u64, difficulty: Difficulty) -> Self {
         let map = Map::generate(seed, difficulty);
         Self {
@@ -43,26 +74,15 @@ impl GameState {
             difficulty,
             map,
             message_queue: Vec::new(),
+            level: 1,
+            total_frags: 0,
+            pending_level_change: None,
         }
     }
 
-    /// Add a player at a spawn position. Returns the assigned player id.
+    /// Add a player at a spawn position.
     pub fn add_player(&mut self, id: u32, name: String, addr: SocketAddr) {
-        // Find a valid spawn position (empty floor) near the center
-        let mut spawn_x = 1.5;
-        let mut spawn_y = 1.5;
-
-        // Simple search for an empty tile
-        'search: for y in 1..self.map.height.saturating_sub(1) {
-            for x in 1..self.map.width.saturating_sub(1) {
-                if !self.map.is_wall(x as f32 + 0.5, y as f32 + 0.5) {
-                    spawn_x = x as f32 + 0.5;
-                    spawn_y = y as f32 + 0.5;
-                    break 'search;
-                }
-            }
-        }
-
+        let (spawn_x, spawn_y) = self.find_spawn(None);
         let player = Player {
             id,
             name,
@@ -71,13 +91,14 @@ impl GameState {
             y: spawn_y,
             angle: 0.0,
             health: MAX_HEALTH,
+            frags: 0,
             last_input_seq: 0,
             last_shot_tick: 0,
         };
         self.players.insert(id, player);
     }
 
-    /// Remove a player by id. Returns `true` if the player existed.
+    /// Remove a player by id.
     pub fn remove_player(&mut self, id: u32) -> bool {
         self.players.remove(&id).is_some()
     }
@@ -107,8 +128,16 @@ impl GameState {
 
     /// Process a movement input for a player.
     pub fn process_input(&mut self, player_id: u32, input: &InputData, input_seq: u32) {
+        const PLAYER_RADIUS: f32 = 0.2;
+
+        let other_positions: Vec<(f32, f32)> = self
+            .players
+            .iter()
+            .filter(|(id, other)| **id != player_id && other.health > 0)
+            .map(|(_, other)| (other.x, other.y))
+            .collect();
+
         if let Some(player) = self.players.get_mut(&player_id) {
-            // Only process inputs newer than what we've already seen.
             if input_seq <= player.last_input_seq && player.last_input_seq > 0 {
                 return;
             }
@@ -122,39 +151,49 @@ impl GameState {
                 TICK_DURATION as f32,
                 &self.map,
             );
-            player.x = new_x;
-            player.y = new_y;
+
+            // Prevent players from pushing each other by blocking overlap.
+            let mut final_x = player.x;
+            let mut final_y = player.y;
+
+            if !Self::collides_with_other_player(&other_positions, new_x, player.y, PLAYER_RADIUS) {
+                final_x = new_x;
+            }
+            if !Self::collides_with_other_player(&other_positions, final_x, new_y, PLAYER_RADIUS) {
+                final_y = new_y;
+            }
+
+            player.x = final_x;
+            player.y = final_y;
             player.angle = new_angle;
 
-            // Check if shooting is allowed
             if input.shoot && self.tick >= player.last_shot_tick + WEAPON_COOLDOWN_TICKS {
                 player.last_shot_tick = self.tick;
 
-                // Hitscan parameters
                 let shooter_x = player.x;
                 let shooter_y = player.y;
                 let shooter_angle = player.angle;
                 let shooter_name = player.name.clone();
+                let shooter_id = player.id;
                 let shooter_dx = shooter_angle.cos();
                 let shooter_dy = shooter_angle.sin();
 
-                // Drop mutable borrow to iterate over other players
                 let max_dist = cast_hitscan_ray(shooter_x, shooter_y, shooter_angle, &self.map);
 
                 let mut hit_target_id = None;
                 let mut min_hit_dist = max_dist;
 
-                // Find closest hit player
                 for (&other_id, other) in &self.players {
                     if other_id == player_id || other.health == 0 {
                         continue;
                     }
                     if ray_intersects_circle(
                         shooter_x, shooter_y, shooter_dx, shooter_dy, other.x, other.y,
-                        0.3, // Simple player radius
+                        0.3,
                     ) {
                         let dist =
-                            ((other.x - shooter_x).powi(2) + (other.y - shooter_y).powi(2)).sqrt();
+                            ((other.x - shooter_x).powi(2) + (other.y - shooter_y).powi(2))
+                                .sqrt();
                         if dist < min_hit_dist {
                             min_hit_dist = dist;
                             hit_target_id = Some(other_id);
@@ -162,7 +201,6 @@ impl GameState {
                     }
                 }
 
-                // Apply damage if a player was hit
                 if let Some(target_id) = hit_target_id {
                     let mut is_dead = false;
                     let mut target_name = String::new();
@@ -173,36 +211,87 @@ impl GameState {
 
                         if target.health == 0 {
                             is_dead = true;
-                            target.health = MAX_HEALTH; // Respawn
+                            target.health = MAX_HEALTH;
 
-                            // Randomize coordinates safely
-                            let mut spawn_x = 1.5;
-                            let mut spawn_y = 1.5;
-                            'find_spawn: for y in 1..self.map.height.saturating_sub(1) {
-                                for x in 1..self.map.width.saturating_sub(1) {
-                                    if !self.map.is_wall(x as f32 + 0.5, y as f32 + 0.5) {
-                                        let dist_from_shooter = ((x as f32 + 0.5 - shooter_x)
-                                            .powi(2)
-                                            + (y as f32 + 0.5 - shooter_y).powi(2))
-                                        .sqrt();
-                                        if dist_from_shooter > 5.0 {
-                                            spawn_x = x as f32 + 0.5;
-                                            spawn_y = y as f32 + 0.5;
-                                            break 'find_spawn;
-                                        }
-                                    }
-                                }
+                            let (spawn_x, spawn_y) = self.find_spawn(Some((shooter_x, shooter_y)));
+                            if let Some(t) = self.players.get_mut(&target_id) {
+                                t.x = spawn_x;
+                                t.y = spawn_y;
                             }
-                            target.x = spawn_x;
-                            target.y = spawn_y;
                         }
                     }
 
                     if is_dead {
-                        self.message_queue
-                            .push(format!("{} fragged {}!", shooter_name, target_name));
+                        // Award frag to shooter
+                        if let Some(shooter) = self.players.get_mut(&shooter_id) {
+                            shooter.frags += 1;
+                        }
+                        self.total_frags += 1;
+
+                        let frag_count = self
+                            .players
+                            .get(&shooter_id)
+                            .map(|p| p.frags)
+                            .unwrap_or(0);
+                        self.message_queue.push(format!(
+                            "{} fragged {}! ({} kills)",
+                            shooter_name, target_name, frag_count
+                        ));
+
+                        // Check level advancement
+                        let threshold = FRAGS_TO_ADVANCE
+                            .get(self.level as usize - 1)
+                            .copied()
+                            .unwrap_or(u32::MAX);
+                        if self.total_frags >= threshold && self.pending_level_change.is_none() {
+                            self.trigger_level_advance();
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /// Triggers a level advance: picks the next difficulty and generates new map info.
+    fn trigger_level_advance(&mut self) {
+        let next_level = (self.level + 1).min(3);
+        let next_difficulty = match next_level {
+            1 => Difficulty::Easy,
+            2 => Difficulty::Medium,
+            _ => Difficulty::Hard,
+        };
+
+        // Generate a new random-ish seed from current tick
+        let new_seed = self.seed.wrapping_add(self.tick as u64 * 6364136223846793005 + 1442695040888963407);
+
+        self.message_queue.push(format!(
+            "=== LEVEL {} START! Maze grows harder... ===",
+            next_level
+        ));
+
+        self.pending_level_change = Some(LevelChangePending {
+            seed: new_seed,
+            difficulty: next_difficulty,
+            level: next_level,
+        });
+
+        // Apply the level change immediately to the server's map
+        self.seed = new_seed;
+        self.difficulty = next_difficulty;
+        self.level = next_level;
+        self.total_frags = 0;
+        self.map = Map::generate(new_seed, next_difficulty);
+
+        // Respawn everyone in the new map
+        let player_ids: Vec<u32> = self.players.keys().copied().collect();
+        let mut spawn_offset = 0;
+        for id in player_ids {
+            let (sx, sy) = self.find_spawn_nth(spawn_offset);
+            spawn_offset += 1;
+            if let Some(p) = self.players.get_mut(&id) {
+                p.x = sx;
+                p.y = sy;
+                p.health = MAX_HEALTH;
             }
         }
     }
@@ -224,6 +313,65 @@ impl GameState {
                 health: p.health,
             })
             .collect()
+    }
+
+    /// Find an empty spawn tile far from `avoid` if provided.
+    fn find_spawn(&self, avoid: Option<(f32, f32)>) -> (f32, f32) {
+        if !self.map.spawn_points.is_empty() {
+            if let Some((ax, ay)) = avoid {
+                if let Some(&(sx, sy)) = self
+                    .map
+                    .spawn_points
+                    .iter()
+                    .find(|(sx, sy)| ((*sx - ax).powi(2) + (*sy - ay).powi(2)).sqrt() > 5.0)
+                {
+                    return (sx, sy);
+                }
+            }
+            return self.map.spawn_points[0];
+        }
+
+        let mut best = (1.5f32, 1.5f32);
+        for y in 1..self.map.height.saturating_sub(1) {
+            for x in 1..self.map.width.saturating_sub(1) {
+                let cx = x as f32 + 0.5;
+                let cy = y as f32 + 0.5;
+                if !self.map.is_wall(cx, cy) {
+                    if let Some((ax, ay)) = avoid {
+                        let d = ((cx - ax).powi(2) + (cy - ay).powi(2)).sqrt();
+                        if d > 5.0 {
+                            return (cx, cy);
+                        }
+                    } else {
+                        return (cx, cy);
+                    }
+                    best = (cx, cy);
+                }
+            }
+        }
+        best
+    }
+
+    /// Find the Nth empty floor tile (wraps around for multiple players).
+    fn find_spawn_nth(&self, n: usize) -> (f32, f32) {
+        if !self.map.spawn_points.is_empty() {
+            return self.map.spawn_points[n % self.map.spawn_points.len()];
+        }
+
+        let mut count = 0;
+        for y in 1..self.map.height.saturating_sub(1) {
+            for x in 1..self.map.width.saturating_sub(1) {
+                let cx = x as f32 + 0.5;
+                let cy = y as f32 + 0.5;
+                if !self.map.is_wall(cx, cy) {
+                    if count == n % (self.map.width * self.map.height) {
+                        return (cx, cy);
+                    }
+                    count += 1;
+                }
+            }
+        }
+        (1.5, 1.5)
     }
 }
 
@@ -257,7 +405,6 @@ mod tests {
         let start_x = gs.players[&1].x;
         let start_y = gs.players[&1].y;
 
-        // Player faces angle 0 → forward = +x direction.
         let input = InputData {
             forward: true,
             ..Default::default()
@@ -266,7 +413,6 @@ mod tests {
 
         let p = &gs.players[&1];
         assert!(p.x > start_x, "player should move forward in x");
-        // y should stay roughly the same (angle=0 → sin(0)=0)
         assert!((p.y - start_y).abs() < 0.001);
     }
 
@@ -276,8 +422,9 @@ mod tests {
         gs.add_player(1, "Carol".into(), dummy_addr());
 
         let start_angle = gs.players[&1].angle;
+        // Positive turn_delta rotates the player clockwise (increasing angle)
         let input = InputData {
-            turn_right: true,
+            turn_delta: 0.2,
             ..Default::default()
         };
         gs.process_input(1, &input, 1);
@@ -306,8 +453,14 @@ mod tests {
         gs.process_input(1, &input, 1);
         let x_after_first = gs.players[&1].x;
 
-        // Same sequence again — should be ignored.
         gs.process_input(1, &input, 1);
         assert_eq!(gs.players[&1].x, x_after_first);
+    }
+
+    #[test]
+    fn level_starts_at_one() {
+        let gs = GameState::new(42, Difficulty::Easy);
+        assert_eq!(gs.level, 1);
+        assert_eq!(gs.total_frags, 0);
     }
 }

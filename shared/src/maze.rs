@@ -14,9 +14,9 @@ impl Difficulty {
     /// Must be odd numbers for the recursive backtracker to work properly.
     pub fn dimensions(&self) -> (usize, usize) {
         match self {
-            Difficulty::Easy => (11, 11),
-            Difficulty::Medium => (21, 21),
-            Difficulty::Hard => (31, 31),
+            Difficulty::Easy => (21, 21),
+            Difficulty::Medium => (31, 31),
+            Difficulty::Hard => (41, 41),
         }
     }
 }
@@ -28,9 +28,50 @@ pub struct Map {
     pub width: usize,
     pub height: usize,
     pub grid: Vec<bool>,
+    /// Precomputed spawn positions (centered in floor tiles).
+    pub spawn_points: Vec<(f32, f32)>,
 }
 
 impl Map {
+    fn compute_spawn_points(grid: &[bool], width: usize, height: usize, desired: usize) -> Vec<(f32, f32)> {
+        let mut spawns = Vec::new();
+
+        // Spread candidates across the map first for better distribution.
+        let x_positions = [1usize, width / 4, width / 2, (width * 3) / 4, width.saturating_sub(2)];
+        let y_positions = [1usize, height / 4, height / 2, (height * 3) / 4, height.saturating_sub(2)];
+
+        for &y in &y_positions {
+            for &x in &x_positions {
+                if x > 0 && y > 0 && x < width - 1 && y < height - 1 && !grid[y * width + x] {
+                    let pt = (x as f32 + 0.5, y as f32 + 0.5);
+                    if !spawns.contains(&pt) {
+                        spawns.push(pt);
+                        if spawns.len() >= desired {
+                            return spawns;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: scan all floor tiles to ensure we always reach desired count if possible.
+        for y in 1..height.saturating_sub(1) {
+            for x in 1..width.saturating_sub(1) {
+                if !grid[y * width + x] {
+                    let pt = (x as f32 + 0.5, y as f32 + 0.5);
+                    if !spawns.contains(&pt) {
+                        spawns.push(pt);
+                        if spawns.len() >= desired {
+                            return spawns;
+                        }
+                    }
+                }
+            }
+        }
+
+        spawns
+    }
+
     /// Generates a new maze using a deterministic seed and the Recursive Backtracker algorithm.
     pub fn generate(seed: u64, difficulty: Difficulty) -> Self {
         let (w, h) = difficulty.dimensions();
@@ -86,10 +127,54 @@ impl Map {
             }
         }
 
+        // Add loops so the maze is more connected (fewer dead-end-only paths).
+        let loop_chance = match difficulty {
+            Difficulty::Easy => 0.20,
+            Difficulty::Medium => 0.16,
+            Difficulty::Hard => 0.12,
+        };
+        for y in 1..h.saturating_sub(1) {
+            for x in 1..w.saturating_sub(1) {
+                if grid[y * w + x] && rng.gen_bool(loop_chance) {
+                    grid[y * w + x] = false;
+                }
+            }
+        }
+
+        // Widen corridors/open spaces by carving around existing floors.
+        let widen_chance = match difficulty {
+            Difficulty::Easy => 0.28,
+            Difficulty::Medium => 0.23,
+            Difficulty::Hard => 0.18,
+        };
+        let mut widened = grid.clone();
+        for y in 1..h.saturating_sub(1) {
+            for x in 1..w.saturating_sub(1) {
+                if !grid[y * w + x] {
+                    if grid[y * w + (x - 1)] && rng.gen_bool(widen_chance) {
+                        widened[y * w + (x - 1)] = false;
+                    }
+                    if grid[y * w + (x + 1)] && rng.gen_bool(widen_chance) {
+                        widened[y * w + (x + 1)] = false;
+                    }
+                    if grid[(y - 1) * w + x] && rng.gen_bool(widen_chance) {
+                        widened[(y - 1) * w + x] = false;
+                    }
+                    if grid[(y + 1) * w + x] && rng.gen_bool(widen_chance) {
+                        widened[(y + 1) * w + x] = false;
+                    }
+                }
+            }
+        }
+        grid = widened;
+
+        let spawn_points = Self::compute_spawn_points(&grid, w, h, 7);
+
         Self {
             width: w,
             height: h,
             grid,
+            spawn_points,
         }
     }
 
@@ -125,9 +210,19 @@ mod tests {
     #[test]
     fn dimensions_easy() {
         let m = Map::generate(1, Difficulty::Easy);
-        assert_eq!(m.width, 11);
-        assert_eq!(m.height, 11);
-        assert_eq!(m.grid.len(), 11 * 11);
+        assert_eq!(m.width, 21);
+        assert_eq!(m.height, 21);
+        assert_eq!(m.grid.len(), 21 * 21);
+    }
+
+    #[test]
+    fn has_spawn_points() {
+        let m = Map::generate(7, Difficulty::Easy);
+        assert!(
+            m.spawn_points.len() >= 7,
+            "expected at least 7 spawn points, got {}",
+            m.spawn_points.len()
+        );
     }
 
     #[test]
@@ -135,7 +230,7 @@ mod tests {
         let m = Map::generate(1, Difficulty::Easy);
         // Map is enclosed by walls, so (0,0) and perimeter should be true (wall)
         assert!(m.is_wall(0.0, 0.0));
-        assert!(m.is_wall(10.9, 0.0));
+        assert!(m.is_wall((m.width as f32) - 0.1, 0.0));
         assert!(m.is_wall(-1.0, 5.0)); // Out of bounds = wall
         assert!(m.is_wall(99.0, 99.0));
 

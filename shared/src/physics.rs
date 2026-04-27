@@ -1,5 +1,5 @@
 use crate::maze::Map;
-use crate::protocol::{InputData, MOVE_SPEED, TURN_SPEED};
+use crate::protocol::{InputData, MOVE_SPEED};
 
 /// Applies movement and turning input to an entity's position and rotation over a time delta.
 /// Returns the new `(x, y, angle)`.
@@ -12,15 +12,8 @@ pub fn apply_input(
     dt: f32,
     map: &Map,
 ) -> (f32, f32, f32) {
-    let mut new_angle = curr_angle;
-
-    // Turning
-    if input.turn_left {
-        new_angle -= TURN_SPEED * dt;
-    }
-    if input.turn_right {
-        new_angle += TURN_SPEED * dt;
-    }
+    // Mouse-driven rotation (turn_delta is a raw radian delta, not scaled by dt)
+    let new_angle = curr_angle + input.turn_delta;
 
     // Movement along facing direction
     let mut dx = 0.0f32;
@@ -33,6 +26,16 @@ pub fn apply_input(
         dx -= new_angle.cos() * MOVE_SPEED * dt;
         dy -= new_angle.sin() * MOVE_SPEED * dt;
     }
+    // Strafe: perpendicular to facing direction.
+    // Right perp = (-sin θ, cos θ), left = (sin θ, -cos θ)
+    if input.strafe_right {
+        dx += -new_angle.sin() * MOVE_SPEED * dt;
+        dy += new_angle.cos() * MOVE_SPEED * dt;
+    }
+    if input.strafe_left {
+        dx += new_angle.sin() * MOVE_SPEED * dt;
+        dy += -new_angle.cos() * MOVE_SPEED * dt;
+    }
 
     // A player's collision radius
     const RADIUS: f32 = 0.2;
@@ -41,12 +44,12 @@ pub fn apply_input(
     let mut new_y = curr_y;
 
     // Slide collision on X axis
-    if !map.is_wall(curr_x + dx + RADIUS.copysign(dx), curr_y) {
+    if dx.abs() > 1e-6 && !map.is_wall(curr_x + dx + RADIUS.copysign(dx), curr_y) {
         new_x += dx;
     }
 
     // Slide collision on Y axis
-    if !map.is_wall(curr_x, curr_y + dy + RADIUS.copysign(dy)) {
+    if dy.abs() > 1e-6 && !map.is_wall(curr_x, curr_y + dy + RADIUS.copysign(dy)) {
         new_y += dy;
     }
 
@@ -112,6 +115,63 @@ pub fn cast_hitscan_ray(px: f32, py: f32, angle: f32, map: &Map) -> f32 {
     }
 }
 
+/// Casts a ray and returns info about the wall hit:
+/// `(cell_x, cell_y, hit_y_side, wall_frac)` where `wall_frac` is 0..1
+/// along the face of the struck wall tile.  Returns `None` if no wall is hit.
+pub fn cast_ray_hit(px: f32, py: f32, angle: f32, map: &Map) -> Option<(i32, i32, bool, f32)> {
+    let rdx = angle.cos();
+    let rdy = angle.sin();
+
+    let mut mx = px as i32;
+    let mut my = py as i32;
+
+    let ddx = if rdx.abs() < 1e-20 { 1e20 } else { (1.0 / rdx).abs() };
+    let ddy = if rdy.abs() < 1e-20 { 1e20 } else { (1.0 / rdy).abs() };
+
+    let (step_x, mut sx): (i32, f32) = if rdx < 0.0 {
+        (-1, (px - mx as f32) * ddx)
+    } else {
+        (1, (mx as f32 + 1.0 - px) * ddx)
+    };
+    let (step_y, mut sy): (i32, f32) = if rdy < 0.0 {
+        (-1, (py - my as f32) * ddy)
+    } else {
+        (1, (my as f32 + 1.0 - py) * ddy)
+    };
+
+    let mut hit_y;
+
+    for _ in 0..128 {
+        if sx < sy {
+            sx += ddx;
+            mx += step_x;
+            hit_y = false;
+        } else {
+            sy += ddy;
+            my += step_y;
+            hit_y = true;
+        }
+        if map.is_wall(mx as f32, my as f32) {
+            // Perpendicular distance to the hit wall face
+            let perp = if !hit_y {
+                (mx as f32 - px + (1 - step_x) as f32 * 0.5) / rdx
+            } else {
+                (my as f32 - py + (1 - step_y) as f32 * 0.5) / rdy
+            };
+            // Fractional position (0..1) along the struck wall face
+            let wall_frac = if !hit_y {
+                let hit = py + perp * rdy;
+                hit - hit.floor()
+            } else {
+                let hit = px + perp * rdx;
+                hit - hit.floor()
+            };
+            return Some((mx, my, hit_y, wall_frac));
+        }
+    }
+    None
+}
+
 /// Checks if a ray starting at `(px, py)` extending to `(px + dx, py + dy)`
 /// intersects a circle of `radius` at `(cx, cy)`.
 pub fn ray_intersects_circle(
@@ -125,7 +185,7 @@ pub fn ray_intersects_circle(
 ) -> bool {
     let t_closest = ((cx - px) * dx + (cy - py) * dy) / (dx * dx + dy * dy);
 
-    if !(0.0..=1.0).contains(&t_closest) {
+    if t_closest < 0.0 {
         return false;
     }
 
