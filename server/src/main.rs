@@ -10,7 +10,21 @@ use shared::network::UdpSocket;
 use shared::protocol::{Packet, DEFAULT_SERVER_PORT, TICK_DURATION};
 
 use crate::game::GameState;
+fn get_local_ip() -> Option<String> {
+    use std::net::{UdpSocket, Ipv4Addr};
 
+    // Create a temporary socket to discover the local IP
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+
+    match local_addr.ip() {
+        std::net::IpAddr::V4(ip) if ip != Ipv4Addr::new(127, 0, 0, 1) => {
+            Some(ip.to_string())
+        }
+            _ => None
+    }
+}
 fn main() {
     env_logger::init();
 
@@ -23,7 +37,18 @@ fn main() {
         socket.local_addr(),
         TICK_DURATION * 1000.0
     );
-
+    // Print the IP address for other players to connect
+    if let Some(local_ip) = get_local_ip() {
+        println!("\n=== SERVER IP ADDRESS ===");
+        println!("Other players can connect using: {}:{}", local_ip, DEFAULT_SERVER_PORT);
+        println!("=========================\n");
+    } else {
+        println!("\n=== SERVER IP ADDRESS ===");
+        println!("Could not detect local IP automatically.");
+        println!("Use 'ipconfig' (Windows) or 'ifconfig' (Mac/Linux) to find your IP.");
+        println!("Then connect using: YOUR_IP:{}", DEFAULT_SERVER_PORT);
+        println!("=========================\n");
+    }
     use rand::Rng;
     use shared::maze::Difficulty;
 
