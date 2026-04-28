@@ -4,6 +4,7 @@ pub mod renderer;
 
 use log::{error, info};
 use macroquad::prelude::*;
+use std::time::Instant;
 
 use shared::maze::Map;
 use shared::network::UdpSocket;
@@ -399,16 +400,20 @@ async fn game_main() {
     socket.send_packet(Packet::Connect { player_name: player_name.clone() }, &server_addr)
         .expect("Send Connect failed");
 
-    // Connecting screen
-    let (my_player_id, seed, difficulty) = loop {
+    // Connecting screen — 5-second timeout
+    let connect_start = Instant::now();
+    let connect_result = loop {
+        if connect_start.elapsed().as_secs() >= 5 {
+            break None;
+        }
         match socket.recv_packet() {
             Ok(Some((_hdr, Packet::Accept { player_id, seed, difficulty }, _src))) => {
                 info!("Connected! id={} seed={}", player_id, seed);
-                break (player_id, seed, difficulty);
+                break Some((player_id, seed, difficulty));
             }
             Ok(Some(_)) | Ok(None) => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => { error!("recv: {}", e); std::process::exit(1); }
+            Err(e) => { error!("recv: {}", e); break None; }
         }
         {
             let sw = screen_width();
@@ -416,6 +421,7 @@ async fn game_main() {
             let ccx = sw * 0.5;
             let ccy = sh * 0.5;
             let bp2 = 30.0_f32;
+            let elapsed = connect_start.elapsed().as_secs_f32();
             // Sky
             draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.42, 0.72, 1.0, 1.0));
             // Grass
@@ -429,16 +435,62 @@ async fn game_main() {
             draw_text(conn_title, ccx - ctw*0.5 + 4.0, ccy - 60.0 + 4.0, cts, Color::new(0.38, 0.28, 0.0, 0.90));
             draw_text(conn_title, ccx - ctw*0.5,        ccy - 60.0,       cts, Color::new(1.0, 0.88, 0.0, 1.0));
             // Connecting text box
-            draw_rectangle(ccx - 200.0, ccy - 8.0, 400.0, 80.0, Color::new(0.12, 0.12, 0.15, 0.88));
-            draw_rectangle_lines(ccx - 202.0, ccy - 10.0, 404.0, 84.0, 2.0, Color::new(0.50, 0.50, 0.55, 1.0));
-            let conn_str = format!("Connecting to {}...", server_addr_str);
+            let dots = ".".repeat(((elapsed * 2.0) as usize % 4) + 1);
+            draw_rectangle(ccx - 220.0, ccy - 8.0, 440.0, 96.0, Color::new(0.12, 0.12, 0.15, 0.88));
+            draw_rectangle_lines(ccx - 222.0, ccy - 10.0, 444.0, 100.0, 2.0, Color::new(0.50, 0.50, 0.55, 1.0));
+            let conn_str = format!("Connecting to {}{}", server_addr_str, dots);
             let csw = measure_text(&conn_str, None, 20, 1.0).width;
             draw_text(&conn_str, ccx - csw*0.5, ccy + 16.0, 20.0, Color::new(0.85, 0.85, 0.85, 1.0));
             let pstr = format!("Player: {}", player_name);
             let psw = measure_text(&pstr, None, 18, 1.0).width;
             draw_text(&pstr, ccx - psw*0.5, ccy + 44.0, 18.0, Color::new(0.68, 0.68, 0.72, 1.0));
+            let remain = 5.0 - elapsed;
+            let hint = format!("Timing out in {:.0}s  (Esc to cancel)", remain.ceil());
+            let hw = measure_text(&hint, None, 15, 1.0).width;
+            draw_text(&hint, ccx - hw*0.5, ccy + 70.0, 15.0, Color::new(0.55, 0.55, 0.60, 1.0));
         }
+        if is_key_pressed(KeyCode::Escape) { return; }
         next_frame().await;
+    };
+
+    // Show "Connection failed" if timed out
+    let (my_player_id, seed, difficulty) = match connect_result {
+        Some(v) => v,
+        None => {
+            loop {
+                let sw = screen_width();
+                let sh = screen_height();
+                let ccx = sw * 0.5;
+                let ccy = sh * 0.5;
+                let bp2 = 30.0_f32;
+                draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.42, 0.72, 1.0, 1.0));
+                draw_rectangle(0.0, sh * 0.66, sw, bp2, Color::new(0.37, 0.68, 0.27, 1.0));
+                draw_rectangle(0.0, sh * 0.66 + bp2, sw, sh, Color::new(0.48, 0.32, 0.18, 1.0));
+                let conn_title = "MINE  MAZE";
+                let cts = (sw * 0.10).clamp(44.0, 80.0);
+                let ctw = measure_text(conn_title, None, cts as u16, 1.0).width;
+                draw_text(conn_title, ccx - ctw*0.5 + 4.0, ccy - 60.0 + 4.0, cts, Color::new(0.38, 0.28, 0.0, 0.90));
+                draw_text(conn_title, ccx - ctw*0.5,        ccy - 60.0,       cts, Color::new(1.0, 0.88, 0.0, 1.0));
+                draw_rectangle(ccx - 240.0, ccy - 20.0, 480.0, 120.0, Color::new(0.18, 0.06, 0.06, 0.95));
+                draw_rectangle_lines(ccx - 242.0, ccy - 22.0, 484.0, 124.0, 2.5, Color::new(0.80, 0.20, 0.20, 1.0));
+                let e1 = "Connection failed!";
+                let e1w = measure_text(e1, None, 26, 1.0).width;
+                draw_text(e1, ccx - e1w*0.5, ccy + 10.0, 26.0, Color::new(1.0, 0.30, 0.30, 1.0));
+                let e2 = format!("Could not reach {}.", server_addr_str);
+                let e2w = measure_text(&e2, None, 18, 1.0).width;
+                draw_text(&e2, ccx - e2w*0.5, ccy + 38.0, 18.0, Color::new(0.80, 0.80, 0.80, 1.0));
+                let e3 = "Make sure the server is running, then try again.";
+                let e3w = measure_text(e3, None, 15, 1.0).width;
+                draw_text(e3, ccx - e3w*0.5, ccy + 60.0, 15.0, Color::new(0.60, 0.60, 0.65, 1.0));
+                let e4 = "Press Esc or Enter to return to lobby";
+                let e4w = measure_text(e4, None, 15, 1.0).width;
+                draw_text(e4, ccx - e4w*0.5, ccy + 84.0, 15.0, Color::new(0.45, 0.45, 0.50, 1.0));
+                next_frame().await;
+                if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) {
+                    return;
+                }
+            }
+        }
     };
 
     let map = Map::generate(seed, difficulty);
