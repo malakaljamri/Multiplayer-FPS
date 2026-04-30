@@ -258,6 +258,20 @@ impl GameState {
                             shooter_name, target_name, frag_count
                         ));
 
+                        // Check if only one player is alive (last man standing)
+                        let alive_players: Vec<&Player> = self.players
+                            .values()
+                            .filter(|p| !p.is_game_over)
+                            .collect();
+                        
+                        if alive_players.len() == 1 {
+                            let winner = &alive_players[0];
+                            self.message_queue.push(format!(
+                                "🎉 CONGRATULATIONS! {} is the last one standing! 🎉",
+                                winner.name
+                            ));
+                        }
+
                         // Check level advancement
                         let threshold = FRAGS_TO_ADVANCE
                             .get(self.level as usize - 1)

@@ -323,14 +323,45 @@ fn draw_game_over_overlay() {
     let i1w = measure_text(instr1, None, 20, 1.0).width;
     draw_text(instr1, px + (pw - i1w) * 0.5, py + 110.0, 20.0, Color::new(0.85, 0.85, 0.85, 1.0));
 
-    let instr2 = "Press R to respawn";
-    let i2w = measure_text(instr2, None, 24, 1.0).width;
-    draw_text(instr2, px + (pw - i2w) * 0.5, py + 150.0, 24.0, Color::new(1.0, 0.88, 0.0, 1.0));
+
 
     let instr3 = "Press Q or Esc to quit";
     let i3w = measure_text(instr3, None, 16, 1.0).width;
     draw_text(instr3, px + (pw - i3w) * 0.5, py + 190.0, 16.0, Color::new(0.60, 0.60, 0.65, 1.0));
 }
+
+fn draw_winner_overlay() {
+    let sw = screen_width();
+    let sh = screen_height();
+
+    // Dim background with golden tint
+    draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.1, 0.08, 0.0, 0.70));
+
+    let pw = 440.0_f32;
+    let ph = 260.0_f32;
+    let px = (sw - pw) * 0.5;
+    let py = (sh - ph) * 0.5;
+
+    draw_rectangle(px, py, pw, ph, Color::new(0.15, 0.12, 0.0, 0.97));
+    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(1.0, 0.88, 0.0, 1.0));
+
+    // Title
+    let title = "YOU WON!";
+    let tm = measure_text(title, None, 48, 1.0);
+    draw_text(title, px + (pw - tm.width) * 0.5, py + 56.0, 48.0, Color::new(1.0, 0.88, 0.0, 1.0));
+    draw_line(px + 20.0, py + 68.0, px + pw - 20.0, py + 68.0, 1.0,
+        Color::new(0.8, 0.6, 0.0, 1.0));
+
+    // Instructions
+    let instr1 = "You are the last one standing!";
+    let i1w = measure_text(instr1, None, 20, 1.0).width;
+    draw_text(instr1, px + (pw - i1w) * 0.5, py + 110.0, 20.0, Color::new(0.85, 0.85, 0.85, 1.0));
+
+    let instr3 = "Press Q or Esc to quit";
+    let i3w = measure_text(instr3, None, 16, 1.0).width;
+    draw_text(instr3, px + (pw - i3w) * 0.5, py + 190.0, 16.0, Color::new(0.60, 0.60, 0.65, 1.0));
+}
+
 
 fn draw_settings_overlay(sensitivity: &mut f32) {
     let sw = screen_width();
@@ -548,6 +579,8 @@ async fn game_main() {
     let mut sensitivity: f32  = 0.35;
     let mut settings_open     = false;
     let mut game_over         = false;
+    let mut was_game_over     = false;
+    let mut is_winner         = false;
     let mut input_sequence: u32      = 0;
     let mut last_snapshot_tick: u32  = 0;
     let mut bullet_marks: Vec<BulletMark> = Vec::new();
@@ -564,6 +597,11 @@ async fn game_main() {
                 show_mouse(false);
             }
         } else if game_over {
+            // Release cursor when game over state changes
+            if !was_game_over {
+                set_cursor_grab(false);
+                show_mouse(true);
+            }
             if is_key_pressed(KeyCode::R) {
                 let _ = socket.send_packet(Packet::Respawn, &server_addr);
             }
@@ -627,7 +665,11 @@ async fn game_main() {
                     if tick > last_snapshot_tick {
                         last_snapshot_tick = tick;
                         if let Some(ls) = players.iter().find(|p| p.id == my_player_id) {
-                            game_over = ls.is_game_over;
+                            // Check if player is the only one alive (winner)
+                            let alive_count = players.iter().filter(|p| !p.is_game_over).count();
+                            is_winner = !ls.is_game_over && alive_count == 1 && players.len() > 1;
+                            // Both winners and eliminated players see overlays
+                            game_over = ls.is_game_over || is_winner;
                             prediction.reconcile(ls, tick, hdr.ack);
                         }
                         interpolation.push_snapshot(tick, players, my_player_id);
@@ -638,6 +680,7 @@ async fn game_main() {
                     prediction.map = Some(Map::generate(seed, difficulty));
                     messages.push(format!("=== LEVEL {} - {:?} ===", level, difficulty));
                     bullet_marks.clear();
+                    is_winner = false; // Reset winner state on new level
                 }
                 Ok(Some((_, Packet::ServerMessage { text }, _))) => { messages.push(text); }
                 Ok(Some((_, Packet::Pong, _))) => {}
@@ -649,6 +692,7 @@ async fn game_main() {
 
         while messages.len() > 8 { messages.remove(0); }
 
+        
         // ── render ──
         let remote_states = interpolation.get_interpolated_state();
         let map_ref = prediction.map.as_ref().unwrap();
@@ -667,9 +711,14 @@ async fn game_main() {
         }
 
         if game_over {
-            draw_game_over_overlay();
+            if is_winner {
+                draw_winner_overlay();
+            } else {
+                draw_game_over_overlay();
+            }
         }
 
+        was_game_over = game_over;
         next_frame().await;
     }
 
