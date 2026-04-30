@@ -82,7 +82,8 @@ impl GameState {
 
     /// Add a player at a spawn position.
     pub fn add_player(&mut self, id: u32, name: String, addr: SocketAddr) {
-        let (spawn_x, spawn_y) = self.find_spawn(None);
+        let spawn_offset = self.players.len();
+        let (spawn_x, spawn_y) = self.find_spawn_nth(spawn_offset);
         let player = Player {
             id,
             name,
