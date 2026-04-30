@@ -25,6 +25,8 @@ pub struct Player {
     pub last_input_seq: u32,
     /// The server tick when the player last shot.
     pub last_shot_tick: u32,
+    /// Whether the player is in game over state (dead and needs to respawn).
+    pub is_game_over: bool,
 }
 
 /// Pending level change information.
@@ -95,6 +97,7 @@ impl GameState {
             frags: 0,
             last_input_seq: 0,
             last_shot_tick: 0,
+            is_game_over: false,
         };
         self.players.insert(id, player);
     }
@@ -102,6 +105,28 @@ impl GameState {
     /// Remove a player by id.
     pub fn remove_player(&mut self, id: u32) -> bool {
         self.players.remove(&id).is_some()
+    }
+
+    /// Respawn a player who was in game over state.
+    pub fn respawn_player(&mut self, player_id: u32) -> bool {
+        // Check if player is in game over state first
+        let is_game_over = self.players.get(&player_id).map(|p| p.is_game_over).unwrap_or(false);
+        if !is_game_over {
+            return false;
+        }
+
+        let (spawn_x, spawn_y) = self.find_spawn(None);
+
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.is_game_over = false;
+            player.health = MAX_HEALTH;
+            player.x = spawn_x;
+            player.y = spawn_y;
+            player.angle = 0.0;
+            true
+        } else {
+            false
+        }
     }
 
     /// Remove a player by their socket address. Returns the id if found.
@@ -212,13 +237,7 @@ impl GameState {
 
                         if target.health == 0 {
                             is_dead = true;
-                            target.health = MAX_HEALTH;
-
-                            let (spawn_x, spawn_y) = self.find_spawn(Some((shooter_x, shooter_y)));
-                            if let Some(t) = self.players.get_mut(&target_id) {
-                                t.x = spawn_x;
-                                t.y = spawn_y;
-                            }
+                            target.is_game_over = true;
                         }
                     }
 
@@ -312,6 +331,7 @@ impl GameState {
                 y: p.y,
                 angle: p.angle,
                 health: p.health,
+                is_game_over: p.is_game_over,
             })
             .collect()
     }

@@ -46,6 +46,7 @@ pub struct PlayerState {
     pub y: f32,
     pub angle: f32,
     pub health: u8,
+    pub is_game_over: bool,
 }
 
 /// Client input intent for a single frame.
@@ -136,6 +137,8 @@ pub enum Packet {
     ServerMessage {
         text: String,
     },
+    /// Client → Server: request to respawn after death.
+    Respawn,
 }
 
 // ---------------------------------------------------------------------------

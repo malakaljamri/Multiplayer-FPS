@@ -128,6 +128,14 @@ fn main() {
                             let _ = socket.send_packet(Packet::Pong, src);
                         }
 
+                        Packet::Respawn => {
+                            if let Some(&id) = addr_to_id.get(&src) {
+                                if game.respawn_player(id) {
+                                    info!("Player id={} respawned", id);
+                                }
+                            }
+                        }
+
                         _ => {}
                     }
                 }

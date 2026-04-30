@@ -296,6 +296,42 @@ fn mc_field(value: &str, x: f32, y: f32, w: f32, h: f32, focused: bool) {
 
 // ── Settings overlay ──────────────────────────────────────────────────────────
 
+fn draw_game_over_overlay() {
+    let sw = screen_width();
+    let sh = screen_height();
+
+    // Dim background
+    draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.70));
+
+    let pw = 440.0_f32;
+    let ph = 260.0_f32;
+    let px = (sw - pw) * 0.5;
+    let py = (sh - ph) * 0.5;
+
+    draw_rectangle(px, py, pw, ph, Color::new(0.25, 0.10, 0.10, 0.97));
+    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.80, 0.20, 0.20, 1.0));
+
+    // Title
+    let title = "GAME OVER";
+    let tm = measure_text(title, None, 48, 1.0);
+    draw_text(title, px + (pw - tm.width) * 0.5, py + 56.0, 48.0, Color::new(1.0, 0.30, 0.30, 1.0));
+    draw_line(px + 20.0, py + 68.0, px + pw - 20.0, py + 68.0, 1.0,
+        Color::new(0.50, 0.20, 0.20, 1.0));
+
+    // Instructions
+    let instr1 = "You have been eliminated!";
+    let i1w = measure_text(instr1, None, 20, 1.0).width;
+    draw_text(instr1, px + (pw - i1w) * 0.5, py + 110.0, 20.0, Color::new(0.85, 0.85, 0.85, 1.0));
+
+    let instr2 = "Press R to respawn";
+    let i2w = measure_text(instr2, None, 24, 1.0).width;
+    draw_text(instr2, px + (pw - i2w) * 0.5, py + 150.0, 24.0, Color::new(1.0, 0.88, 0.0, 1.0));
+
+    let instr3 = "Press Q or Esc to quit";
+    let i3w = measure_text(instr3, None, 16, 1.0).width;
+    draw_text(instr3, px + (pw - i3w) * 0.5, py + 190.0, 16.0, Color::new(0.60, 0.60, 0.65, 1.0));
+}
+
 fn draw_settings_overlay(sensitivity: &mut f32) {
     let sw = screen_width();
     let sh = screen_height();
@@ -511,6 +547,7 @@ async fn game_main() {
 
     let mut sensitivity: f32  = 0.35;
     let mut settings_open     = false;
+    let mut game_over         = false;
     let mut input_sequence: u32      = 0;
     let mut last_snapshot_tick: u32  = 0;
     let mut bullet_marks: Vec<BulletMark> = Vec::new();
@@ -526,6 +563,13 @@ async fn game_main() {
                 set_cursor_grab(true);
                 show_mouse(false);
             }
+        } else if game_over {
+            if is_key_pressed(KeyCode::R) {
+                let _ = socket.send_packet(Packet::Respawn, &server_addr);
+            }
+            if is_key_pressed(KeyCode::Q) || is_key_pressed(KeyCode::Escape) {
+                break;
+            }
         } else {
             if is_key_pressed(KeyCode::Q) || is_key_pressed(KeyCode::Escape) {
                 break;
@@ -537,9 +581,9 @@ async fn game_main() {
             }
         }
 
-        // ── input (skipped while settings open) ──
+        // ── input (skipped while settings open or game over) ──
         let mut input = shared::protocol::InputData::default();
-        if !settings_open {
+        if !settings_open && !game_over {
             let mdx = mouse_delta_position().x;
 
             if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up)    { input.forward      = true; }
@@ -583,6 +627,7 @@ async fn game_main() {
                     if tick > last_snapshot_tick {
                         last_snapshot_tick = tick;
                         if let Some(ls) = players.iter().find(|p| p.id == my_player_id) {
+                            game_over = ls.is_game_over;
                             prediction.reconcile(ls, tick, hdr.ack);
                         }
                         interpolation.push_snapshot(tick, players, my_player_id);
@@ -619,6 +664,10 @@ async fn game_main() {
 
         if settings_open {
             draw_settings_overlay(&mut sensitivity);
+        }
+
+        if game_over {
+            draw_game_over_overlay();
         }
 
         next_frame().await;
