@@ -12,6 +12,7 @@ const FRAGS_TO_ADVANCE: [u32; 3] = [5, 10, 15];
 
 /// Server-side representation of a connected player.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct Player {
     pub id: u32,
     pub name: String,
@@ -84,8 +85,7 @@ impl GameState {
 
     /// Add a player at a spawn position.
     pub fn add_player(&mut self, id: u32, name: String, addr: SocketAddr) {
-        let spawn_offset = self.players.len();
-        let (spawn_x, spawn_y) = self.find_spawn_nth(spawn_offset);
+        let (spawn_x, spawn_y) = self.find_distributed_spawn();
         let player = Player {
             id,
             name,
@@ -115,7 +115,7 @@ impl GameState {
             return false;
         }
 
-        let (spawn_x, spawn_y) = self.find_spawn(None);
+        let (spawn_x, spawn_y) = self.find_distributed_spawn();
 
         if let Some(player) = self.players.get_mut(&player_id) {
             player.is_game_over = false;
@@ -316,16 +316,19 @@ impl GameState {
         self.total_frags = 0;
         self.map = Map::generate(new_seed, next_difficulty);
 
-        // Respawn everyone in the new map
+        // Respawn everyone in the new map with distributed spawning
         let player_ids: Vec<u32> = self.players.keys().copied().collect();
-        let mut spawn_offset = 0;
+        // Temporarily clear players to allow distributed spawning calculation
+        let temp_players: std::collections::HashMap<u32, Player> = self.players.drain().collect();
+        
         for id in player_ids {
-            let (sx, sy) = self.find_spawn_nth(spawn_offset);
-            spawn_offset += 1;
-            if let Some(p) = self.players.get_mut(&id) {
+            let (sx, sy) = self.find_distributed_spawn();
+            if let Some(mut p) = temp_players.get(&id).cloned() {
                 p.x = sx;
                 p.y = sy;
                 p.health = MAX_HEALTH;
+                p.is_game_over = false;
+                self.players.insert(id, p);
             }
         }
     }
@@ -407,6 +410,62 @@ impl GameState {
             }
         }
         (1.5, 1.5)
+    }
+
+    /// Find a spawn position that distributes players across the map.
+    fn find_distributed_spawn(&self) -> (f32, f32) {
+        // Collect all valid spawn positions
+        let mut valid_spawns: Vec<(f32, f32)> = Vec::new();
+        
+        // Use predefined spawn points if available
+        if !self.map.spawn_points.is_empty() {
+            valid_spawns = self.map.spawn_points.clone();
+        } else {
+            // Find all valid floor tiles
+            for y in 1..self.map.height.saturating_sub(1) {
+                for x in 1..self.map.width.saturating_sub(1) {
+                    let cx = x as f32 + 0.5;
+                    let cy = y as f32 + 0.5;
+                    if !self.map.is_wall(cx, cy) {
+                        valid_spawns.push((cx, cy));
+                    }
+                }
+            }
+        }
+
+        if valid_spawns.is_empty() {
+            return (1.5, 1.5); // Fallback position
+        }
+
+        // If no players yet, pick a random spawn
+        if self.players.is_empty() {
+            let index = (self.tick as usize) % valid_spawns.len();
+            return valid_spawns[index];
+        }
+
+        // Find the spawn position farthest from all existing players
+        let mut best_spawn = valid_spawns[0];
+        let mut best_min_distance = 0.0;
+
+        for spawn_pos in &valid_spawns {
+            let mut min_distance_to_players = f32::INFINITY;
+            
+            // Calculate distance to each existing player
+            for player in self.players.values() {
+                let distance = ((spawn_pos.0 - player.x).powi(2) + (spawn_pos.1 - player.y).powi(2)).sqrt();
+                if distance < min_distance_to_players {
+                    min_distance_to_players = distance;
+                }
+            }
+
+            // Choose the spawn with the maximum minimum distance to players
+            if min_distance_to_players > best_min_distance {
+                best_min_distance = min_distance_to_players;
+                best_spawn = *spawn_pos;
+            }
+        }
+
+        best_spawn
     }
 }
 
