@@ -34,7 +34,7 @@ RUST_LOG=info cargo run --bin client
 
 > **Windows (PowerShell):** set the env var first:
 >
-> ```powershell
+> ```powershellc
 > $env:RUST_LOG="info"; cargo run --bin server
 > $env:RUST_LOG="info"; cargo run --bin client
 > ```
