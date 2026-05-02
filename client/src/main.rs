@@ -44,6 +44,8 @@ async fn lobby_screen() -> Option<(String, String)> {
     let mut name = String::new();
     let mut focused = Field::Name;
     let mut anim: f32 = 0.0;
+    let mut show_name_error: bool = false;
+    let mut error_timer: f32 = 0.0;
 
     loop {
         anim += get_frame_time();
@@ -52,13 +54,28 @@ async fn lobby_screen() -> Option<(String, String)> {
             if c.is_control() { continue; }
             match focused {
                 Field::Ip   => ip.push(c),
-                Field::Name => name.push(c),
+                Field::Name => {
+                    name.push(c);
+                    show_name_error = false; // Reset error when user starts typing
+                },
+            }
+        }
+        
+        // Update error timer
+        if show_name_error {
+            error_timer += get_frame_time();
+            if error_timer > 3.0 { // Show error for 3 seconds
+                show_name_error = false;
+                error_timer = 0.0;
             }
         }
         if is_key_pressed(KeyCode::Backspace) {
             match focused {
                 Field::Ip   => { ip.pop(); }
-                Field::Name => { name.pop(); }
+                Field::Name => { 
+                    name.pop(); 
+                    show_name_error = false; // Reset error when user deletes characters
+                }
             }
         }
         if is_key_pressed(KeyCode::Tab) {
@@ -255,6 +272,32 @@ async fn lobby_screen() -> Option<(String, String)> {
             Color::new(0.0, 0.0, 0.0, 0.60));
         draw_text(lbl, btn_x + (btn_w - lw)*0.5, btn_y + btn_h*0.65, 24.0, WHITE);
 
+        // Error message for empty name
+        if show_name_error {
+            let error_alpha = if error_timer < 0.5 {
+                error_timer * 2.0 // Fade in
+            } else if error_timer > 2.5 {
+                (3.0 - error_timer) * 2.0 // Fade out
+            } else {
+                1.0 // Full opacity
+            };
+            
+            let error_msg = "Please enter your name to continue!";
+            let error_w = measure_text(error_msg, None, 18, 1.0).width;
+            let error_x = cx - error_w * 0.5;
+            let error_y = name_y + field_h + 15.0;
+            
+            // Error background
+            draw_rectangle(error_x - 8.0, error_y - 2.0, error_w + 16.0, 24.0, 
+                Color::new(0.8, 0.2, 0.2, error_alpha * 0.9));
+            draw_rectangle_lines(error_x - 8.0, error_y - 2.0, error_w + 16.0, 24.0, 1.5,
+                Color::new(1.0, 0.4, 0.4, error_alpha));
+            
+            // Error text
+            draw_text(error_msg, error_x, error_y + 16.0, 18.0, 
+                Color::new(1.0, 1.0, 1.0, error_alpha));
+        }
+
         // Footer hint
         draw_text(
             "Tab = switch field   Enter = play   Esc = quit",
@@ -264,8 +307,14 @@ async fn lobby_screen() -> Option<(String, String)> {
         next_frame().await;
 
         if start {
+            if name.trim().is_empty() {
+                show_name_error = true;
+                error_timer = 0.0;
+                focused = Field::Name; // Focus back on name field
+                continue;
+            }
             let rip   = if ip.trim().is_empty()   { default_ip.clone() } else { ip.trim().to_string() };
-            let rname = if name.trim().is_empty()  { "Steve".to_string() } else { name.trim().to_string() };
+            let rname = name.trim().to_string();
             return Some((rip, rname));
         }
     }
