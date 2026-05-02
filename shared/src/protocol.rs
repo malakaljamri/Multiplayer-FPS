@@ -292,6 +292,7 @@ mod tests {
                         y: 2.0,
                         angle: 0.5,
                         health: 100,
+                        is_game_over: false,
                     },
                     PlayerState {
                         id: 2,
@@ -299,6 +300,7 @@ mod tests {
                         y: 3.0,
                         angle: 1.2,
                         health: 80,
+                        is_game_over: false,
                     },
                 ],
             },
