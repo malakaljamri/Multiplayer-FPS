@@ -5,6 +5,15 @@ use log::{debug, info, warn};
 
 use crate::protocol::{self, Packet, PacketHeader, WirePacket, MAX_PACKET_SIZE};
 
+/// Windows UDP can surface ICMP "port unreachable" as `WSAECONNRESET` on `recv_from`.
+/// Treat it like "no packet" so callers don't spam logs every poll.
+fn recv_transient_os_noise(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
+    )
+}
+
 /// A thin wrapper around `std::net::UdpSocket` that enforces
 /// non-blocking mode and adds typed packet send/receive.
 pub struct UdpSocket {
@@ -46,6 +55,7 @@ impl UdpSocket {
         match self.inner.recv_from(buf) {
             Ok((n, addr)) => Ok(Some((n, addr))),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(ref e) if recv_transient_os_noise(e) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -107,7 +117,7 @@ impl UdpSocket {
                     Ok(None)
                 }
             },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || recv_transient_os_noise(e) => Ok(None),
             Err(e) => Err(e),
         }
     }

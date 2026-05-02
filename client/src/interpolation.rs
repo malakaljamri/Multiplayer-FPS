@@ -132,6 +132,7 @@ impl InterpolationRemote {
             y: p0.y + (p1.y - p0.y) * t,
             angle: p0.angle + angle_diff * t,
             health: p0.health, // Don't interpolate discrete values
+            frags: p0.frags,
             is_game_over: p0.is_game_over, // Don't interpolate discrete values
         }
     }

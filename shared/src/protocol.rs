@@ -46,6 +46,7 @@ pub struct PlayerState {
     pub y: f32,
     pub angle: f32,
     pub health: u8,
+    pub frags: u32,
     pub is_game_over: bool,
 }
 
@@ -291,6 +292,7 @@ mod tests {
                         x: 1.0,
                         y: 2.0,
                         angle: 0.5,
+                        frags: 0,
                         health: 100,
                         is_game_over: false,
                     },
@@ -299,6 +301,7 @@ mod tests {
                         x: 5.0,
                         y: 3.0,
                         angle: 1.2,
+                        frags: 0,
                         health: 80,
                         is_game_over: false,
                     },

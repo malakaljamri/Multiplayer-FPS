@@ -348,6 +348,7 @@ impl GameState {
                 y: p.y,
                 angle: p.angle,
                 health: p.health,
+                frags: p.frags,
                 is_game_over: p.is_game_over,
             })
             .collect()

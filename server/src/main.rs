@@ -3,9 +3,10 @@ mod game;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-
 use log::{info, warn};
+use rand::Rng;
 
+use shared::maze::Difficulty;
 use shared::network::UdpSocket;
 use shared::protocol::{Packet, DEFAULT_SERVER_PORT, TICK_DURATION};
 
@@ -49,8 +50,7 @@ fn main() {
         println!("Then connect using: YOUR_IP:{}", DEFAULT_SERVER_PORT);
         println!("=========================\n");
     }
-    use rand::Rng;
-    use shared::maze::Difficulty;
+    
 
     let seed: u64 = rand::thread_rng().gen();
     let difficulty = Difficulty::Easy; // Level 1 starts Easy

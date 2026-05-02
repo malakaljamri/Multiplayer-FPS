@@ -26,6 +26,7 @@ impl PredictionLocal {
                 y: 0.0,
                 angle: 0.0,
                 health: 100,
+                frags: 0,
                 is_game_over: false,
             },
             unacked_inputs: Vec::new(),
