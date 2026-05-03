@@ -202,8 +202,8 @@ impl Renderer {
             }
             self.draw_player_model(remote);
         }
-        self.draw_weapon_viewmodelv2(player);
 
+        self.draw_weapon_viewmodelv2(player);
         set_default_camera();
 
         // Muzzle flash (2-D)

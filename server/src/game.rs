@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use shared::maze::{Difficulty, Map};
 use shared::physics::{apply_input, cast_hitscan_ray, ray_intersects_circle};
 use shared::protocol::{
-    InputData, PlayerState, MAX_HEALTH, TICK_DURATION, WEAPON_COOLDOWN_TICKS, WEAPON_DAMAGE,
+    InputData, MAX_HEALTH, PlayerState, TICK_DURATION, WEAPON_COOLDOWN_TICKS, WEAPON_DAMAGE, encode_name
 };
 
 /// Frags needed to advance from each level.
@@ -347,6 +347,7 @@ impl GameState {
                 x: p.x,
                 y: p.y,
                 angle: p.angle,
+                name:  encode_name(&p.name),
                 health: p.health,
                 frags: p.frags,
                 is_game_over: p.is_game_over,

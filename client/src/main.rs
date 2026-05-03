@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use shared::maze::Map;
 use shared::network::UdpSocket;
 use shared::physics::cast_ray_hit;
-use shared::protocol::{Packet, DEFAULT_SERVER_PORT};
+use shared::protocol::{decode_name, Packet, PlayerState, DEFAULT_SERVER_PORT};
 
 use interpolation::InterpolationRemote;
 use prediction::PredictionLocal;
@@ -20,6 +20,12 @@ const MAX_BULLET_MARKS: usize = 64;
 enum GameLoopControl {
     Exit,
     Restart,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum SettingsSelector {
+    Dashboard,
+    Settings,
 }
 
 fn window_conf() -> macroquad::conf::Conf {
@@ -313,6 +319,7 @@ async fn run_session() -> GameLoopControl {
     let mut last_snapshot_tick: u32 = 0;
     let mut bullet_marks: Vec<BulletMark> = Vec::new();
     let mut player_last_shot = Instant::now();
+    let mut settings_selector: SettingsSelector = SettingsSelector::Dashboard;
 
     set_cursor_grab(true);
     show_mouse(false);
@@ -341,7 +348,10 @@ async fn run_session() -> GameLoopControl {
             if is_key_pressed(KeyCode::Q) || is_key_pressed(KeyCode::Escape) {
                 return GameLoopControl::Exit;
             }
-            if is_key_pressed(KeyCode::Tab) {
+            if is_key_pressed(KeyCode::Tab)
+                || is_key_pressed(KeyCode::LeftAlt)
+                || is_key_pressed(KeyCode::RightAlt)
+            {
                 settings_open = true;
                 set_cursor_grab(false);
                 show_mouse(true);
@@ -469,7 +479,7 @@ async fn run_session() -> GameLoopControl {
         }
 
         // ── render ──
-        let remote_states = interpolation.get_interpolated_state();
+        let mut remote_states: Vec<PlayerState> = interpolation.get_interpolated_state();
         let map_ref = prediction.map.as_ref().unwrap();
 
         renderer.render(
@@ -482,7 +492,17 @@ async fn run_session() -> GameLoopControl {
         );
 
         if settings_open {
-            draw_settings_overlay(&mut sensitivity);
+            // Include the local player in the dashboard list (remote_states only contains others).
+            let mut display_states = remote_states.clone();
+            display_states.push(prediction.local_state.clone());
+            // Ensure same ordering: highest frags first, tiebreaker by lowest id.
+            display_states.sort_by_key(|p| (std::cmp::Reverse(p.frags), p.id));
+            draw_dashboard_and_settings_overlay(
+                &mut sensitivity,
+                &mut settings_selector,
+                &display_states,
+                my_player_id,
+            );
         }
 
         if game_over {
@@ -521,6 +541,10 @@ async fn lobby_screen() -> Option<(std::net::SocketAddr, String)> {
     let mut show_name_error: bool = false;
     let mut show_ip_error: bool = false;
     let mut error_timer: f32 = 0.0;
+    let mut backspace_init: f32 = 0.4;
+    let mut backspace_held: f32 = 0.0;
+    let mut backspace_hold = false;
+    let mut delete_text = false;
 
     // Clear any buffered input from previous screens
     while let Some(_) = get_char_pressed() {}
@@ -554,7 +578,33 @@ async fn lobby_screen() -> Option<(std::net::SocketAddr, String)> {
                 error_timer = 0.0;
             }
         }
-        if is_key_pressed(KeyCode::Backspace) || is_key_down(KeyCode::Backspace) {
+
+        if is_key_down(KeyCode::Backspace) {
+            if backspace_hold == true {
+                backspace_held += get_frame_time();
+                if backspace_held <= 0.1 {
+                    delete_text = false;
+                } else {
+                    delete_text = true;
+                    backspace_held = 0.0;
+                }
+            } else {
+                if backspace_init == 0.4 {
+                    delete_text = true;
+                }
+                backspace_init -= get_frame_time();
+                if backspace_init <= 0.0 {
+                    backspace_hold = true;
+                    delete_text = true;
+                }
+            }
+            
+        } else {
+            backspace_hold = false;
+            backspace_init = 0.4;
+        }
+
+        if delete_text {
             match focused {
                 Field::Ip => {
                     ip.pop();
@@ -565,6 +615,7 @@ async fn lobby_screen() -> Option<(std::net::SocketAddr, String)> {
                     show_name_error = false;
                 }
             }
+            delete_text = false;
         }
         if is_key_pressed(KeyCode::Tab) {
             focused = if focused == Field::Ip {
@@ -1151,98 +1202,258 @@ fn draw_winner_overlay() {
     );
 }
 
-fn draw_settings_overlay(sensitivity: &mut f32) {
+fn draw_dashboard_and_settings_overlay(
+    sensitivity: &mut f32,
+    settings_selector: &mut SettingsSelector,
+    players: &[PlayerState],
+    my_id: u32,
+) {
     let sw = screen_width();
     let sh = screen_height();
 
     // Dim background
     draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.58));
-
     let pw = 460.0_f32;
     let ph = 270.0_f32;
     let px = (sw - pw) * 0.5;
     let py = (sh - ph) * 0.5;
 
-    draw_rectangle(px, py, pw, ph, Color::new(0.20, 0.15, 0.10, 0.97));
-    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.42, 0.32, 0.24, 1.0));
+    let selectorw = pw;
+    let selectorh = ph / 4.0;
+    let selectorx = px;
+    let selectory = py - selectorh - 20.0;
 
-    // Title
-    let title = "MINECRAFT SETTINGS";
-    let tm = measure_text(title, None, 34, 1.0);
-    draw_text(title, px + (pw - tm.width) * 0.5, py + 46.0, 34.0, WHITE);
+    draw_rectangle(
+        selectorx,
+        selectory,
+        selectorw,
+        selectorh,
+        Color::new(0.20, 0.15, 0.10, 0.97),
+    );
+    draw_rectangle_lines(
+        selectorx,
+        selectory,
+        selectorw,
+        selectorh,
+        2.0,
+        Color::new(0.42, 0.32, 0.24, 1.0),
+    );
+    //Dashboard/Settings select
+    let dss1 = "DASHBOARD";
+    let dss2 = "SETTINGS";
+
+    let font_size = 28.0;
+    let dss1m = measure_text(dss1, None, font_size as u16, 1.0);
+    let dss2m = measure_text(dss2, None, font_size as u16, 1.0);
+    let dash_x = selectorx + selectorw * 0.25 - dss1m.width * 0.5;
+    let settings_x = selectorx + selectorw * 0.75 - dss2m.width * 0.5;
+
+    let text_y = selectory + selectorh * 0.5 + dss1m.height * 0.35;
+
+    let dash_color = match settings_selector {
+        SettingsSelector::Dashboard => YELLOW,
+        SettingsSelector::Settings => WHITE,
+    };
+
+    let settings_color = match settings_selector {
+        SettingsSelector::Dashboard => WHITE,
+        SettingsSelector::Settings => YELLOW,
+    };
+
+    draw_text(dss1, dash_x, text_y, font_size, dash_color);
+    draw_text(dss2, settings_x, text_y, font_size, settings_color);
+
+    // Underline DASHBOARD
     draw_line(
-        px + 20.0,
-        py + 58.0,
-        px + pw - 20.0,
-        py + 58.0,
+        dash_x,
+        text_y + 6.0,
+        dash_x + dss1m.width,
+        text_y + 6.0,
+        2.0,
+        dash_color,
+    );
+
+    // Underline SETTINGS
+    draw_line(
+        settings_x,
+        text_y + 6.0,
+        settings_x + dss2m.width,
+        text_y + 6.0,
+        2.0,
+        settings_color,
+    );
+
+    // Center divider
+    draw_line(
+        selectorx + selectorw / 2.0,
+        selectory + 5.0,
+        selectorx + selectorw / 2.0,
+        selectory + selectorh - 5.0,
         1.0,
         Color::new(0.35, 0.28, 0.20, 1.0),
     );
 
-    // Sensitivity label
-    let label = format!("Mouse Sensitivity:  {:.2}", sensitivity);
-    draw_text(&label, px + 28.0, py + 98.0, 20.0, LIGHTGRAY);
+    draw_rectangle(px, py, pw, ph, Color::new(0.20, 0.15, 0.10, 0.97));
+    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.42, 0.32, 0.24, 1.0));
 
-    // Slider track
-    let slx = px + 28.0;
-    let sly = py + 112.0;
-    let slw = pw - 56.0;
-    let slh = 26.0_f32;
-    let t = *sensitivity;
+    // Title
+    // let title = "MINECRAFT SETTINGS";
+    // let tm = measure_text(title, None, 34, 1.0);
+    // draw_text(title, px + (pw - tm.width) * 0.5, py + 46.0, 34.0, WHITE);
+    // draw_line(
+    //     px + 20.0,
+    //     py + 58.0,
+    //     px + pw - 20.0,
+    //     py + 58.0,
+    //     1.0,
+    //     Color::new(0.35, 0.28, 0.20, 1.0),
+    // );
 
-    draw_rectangle(slx, sly, slw, slh, Color::new(0.16, 0.16, 0.20, 1.0));
-    draw_rectangle(slx, sly, slw * t, slh, Color::new(0.18, 0.64, 0.34, 1.0));
-    draw_rectangle_lines(slx, sly, slw, slh, 1.5, Color::new(0.30, 0.30, 0.38, 1.0));
-
-    // Slider handle
-    let hx = (slx + slw * t - 7.0).clamp(slx, slx + slw - 14.0);
-    draw_rectangle(hx, sly - 4.0, 14.0, slh + 8.0, WHITE);
-
-    // Labels: low / high
-    draw_text("0.0", slx, sly + slh + 16.0, 14.0, DARKGRAY);
-    let hi = "1.0";
-    let hiw = measure_text(hi, None, 14, 1.0).width;
-    draw_text(hi, slx + slw - hiw, sly + slh + 16.0, 14.0, DARKGRAY);
-
-    // Mouse drag on slider
+    // Mouse drag on slider & selector detect
     let (mx, my) = mouse_position();
+
     if is_mouse_button_down(MouseButton::Left)
-        && mx >= slx
-        && mx <= slx + slw
-        && my >= sly - 6.0
-        && my <= sly + slh + 6.0
+        && mx >= selectorx
+        && mx <= selectorx + selectorw / 2.0
+        && my >= selectory
+        && my <= selectory + selectorh
     {
-        *sensitivity = ((mx - slx) / slw).clamp(0.0, 1.0);
+        *settings_selector = SettingsSelector::Dashboard;
+    }
+    if is_mouse_button_down(MouseButton::Left)
+        && mx >= selectorx + selectorw / 2.0
+        && mx <= selectorx + selectorw
+        && my >= selectory
+        && my <= selectory + selectorh
+    {
+        *settings_selector = SettingsSelector::Settings;
     }
 
-    // Keyboard fine-tune (Left / Right arrows)
-    if is_key_pressed(KeyCode::Left) {
-        *sensitivity = ((*sensitivity - 0.05) * 20.0).round() / 20.0;
-        *sensitivity = sensitivity.max(0.0);
-    }
-    if is_key_pressed(KeyCode::Right) {
-        *sensitivity = ((*sensitivity + 0.05) * 20.0).round() / 20.0;
-        *sensitivity = sensitivity.min(1.0);
+    if *settings_selector == SettingsSelector::Dashboard {
+        let thead = "Top Players";
+        let tdim = measure_text(thead, None, 20, 1.0);
+
+        let startx = px + 20.0;
+        let starty = py + 10.0;
+        let entryw = pw - 40.0;
+
+        // Header
+        draw_text(
+            thead,
+            startx + entryw / 2.0 - tdim.width / 2.0,
+            starty + tdim.height,
+            20.0,
+            WHITE,
+        );
+
+        // Line under header
+        let mut y = starty + tdim.height + 10.0;
+        draw_line(startx, y, startx + entryw, y, 1.0, WHITE);
+
+        y += 10.0;
+
+        for player in players.iter().take(7) {
+            let row_h = 18.0;
+
+            let name_text = decode_name(&player.name);
+            let frag_text = &player.frags.to_string();
+
+            let name_dim = measure_text(name_text, None, 18, 1.0);
+            let frag_dim = measure_text(frag_text, None, 18, 1.0);
+
+            let left_x = startx;
+            let right_x = startx + entryw;
+
+            let name_y = y + row_h;
+
+            // Name (left)
+            draw_text(name_text, left_x, name_y, 18.0, if my_id == player.id { YELLOW} else {WHITE});
+
+            // Frags (right-aligned)
+            draw_text(frag_text, right_x - frag_dim.width, name_y, 18.0, YELLOW);
+
+            // Divider line
+            y += row_h + 6.0;
+            draw_line(
+                startx,
+                y,
+                startx + entryw,
+                y,
+                0.8,
+                Color::new(0.3, 0.3, 0.3, 1.0),
+            );
+
+            y += 6.0;
+        }
+
+        if players.len() > 7 {
+            draw_text(&format!("...{} other players", players.len() - 7), startx, py + ph - 5.0, 15.0, GRAY);
+        }
     }
 
-    // Hints
-    let hint1 = "Drag slider  or  Left / Right arrows to adjust";
-    let h1w = measure_text(hint1, None, 14, 1.0).width;
-    draw_text(
-        hint1,
-        px + (pw - h1w) * 0.5,
-        sly + slh + 34.0,
-        14.0,
-        Color::new(0.38, 0.38, 0.42, 1.0),
-    );
+    if *settings_selector == SettingsSelector::Settings {
+        // Sensitivity label
+        let label = format!("Mouse Sensitivity:  {:.2}", sensitivity);
+        draw_text(&label, px + 28.0, py + 98.0, 20.0, LIGHTGRAY);
 
-    let hint2 = "Tab / Esc  --  resume game";
-    let h2w = measure_text(hint2, None, 16, 1.0).width;
-    draw_text(
-        hint2,
-        px + (pw - h2w) * 0.5,
-        py + ph - 16.0,
-        16.0,
-        Color::new(0.35, 0.35, 0.40, 1.0),
-    );
+        // Slider track
+        let slx = px + 28.0;
+        let sly = py + 112.0;
+        let slw = pw - 56.0;
+        let slh = 26.0_f32;
+        let t = *sensitivity;
+
+        draw_rectangle(slx, sly, slw, slh, Color::new(0.16, 0.16, 0.20, 1.0));
+        draw_rectangle(slx, sly, slw * t, slh, Color::new(0.18, 0.64, 0.34, 1.0));
+        draw_rectangle_lines(slx, sly, slw, slh, 1.5, Color::new(0.30, 0.30, 0.38, 1.0));
+
+        // Slider handle
+        let hx = (slx + slw * t - 7.0).clamp(slx, slx + slw - 14.0);
+        draw_rectangle(hx, sly - 4.0, 14.0, slh + 8.0, WHITE);
+
+        // Labels: low / high
+        draw_text("0.0", slx, sly + slh + 16.0, 14.0, DARKGRAY);
+        let hi = "1.0";
+        let hiw = measure_text(hi, None, 14, 1.0).width;
+        draw_text(hi, slx + slw - hiw, sly + slh + 16.0, 14.0, DARKGRAY);
+        if is_mouse_button_down(MouseButton::Left)
+            && mx >= slx
+            && mx <= slx + slw
+            && my >= sly - 6.0
+            && my <= sly + slh + 6.0
+        {
+            *sensitivity = ((mx - slx) / slw).clamp(0.0, 1.0);
+        }
+
+        // Keyboard fine-tune (Left / Right arrows)
+        if is_key_pressed(KeyCode::Left) {
+            *sensitivity = ((*sensitivity - 0.05) * 20.0).round() / 20.0;
+            *sensitivity = sensitivity.max(0.0);
+        }
+        if is_key_pressed(KeyCode::Right) {
+            *sensitivity = ((*sensitivity + 0.05) * 20.0).round() / 20.0;
+            *sensitivity = sensitivity.min(1.0);
+        }
+
+        // Hints
+        let hint1 = "Drag slider  or  Left / Right arrows to adjust";
+        let h1w = measure_text(hint1, None, 14, 1.0).width;
+        draw_text(
+            hint1,
+            px + (pw - h1w) * 0.5,
+            sly + slh + 34.0,
+            14.0,
+            Color::new(0.38, 0.38, 0.42, 1.0),
+        );
+
+        let hint2 = "Tab / Esc  --  resume game";
+        let h2w = measure_text(hint2, None, 16, 1.0).width;
+        draw_text(
+            hint2,
+            px + (pw - h2w) * 0.5,
+            py + ph - 16.0,
+            16.0,
+            Color::new(0.35, 0.35, 0.40, 1.0),
+        );
+    }
 }

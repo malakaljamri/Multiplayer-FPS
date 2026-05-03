@@ -96,28 +96,40 @@ impl UdpSocket {
     pub fn recv_packet(&mut self) -> io::Result<Option<(PacketHeader, Packet, SocketAddr)>> {
         let mut buf = [0u8; MAX_PACKET_SIZE];
         match self.inner.recv_from(&mut buf) {
-            Ok((n, addr)) => match protocol::deserialize(&buf[..n]) {
-                Some(wire) => {
-                    let seq = wire.header.sequence;
-                    let last = self.last_remote_sequence;
-                    if seq.wrapping_sub(last) < u32::MAX / 2 {
-                        self.last_remote_sequence = seq;
+            Ok((n, addr)) => {
+                // Try to deserialize and log any bincode error to aid debugging.
+                match bincode::deserialize::<WirePacket>(&buf[..n]) {
+                    Ok(wire) => {
+                        let seq = wire.header.sequence;
+                        let last = self.last_remote_sequence;
+                        if seq.wrapping_sub(last) < u32::MAX / 2 {
+                            self.last_remote_sequence = seq;
+                        }
+                        debug!(
+                            "RX seq={} from {} ({} bytes)",
+                            wire.header.sequence, addr, n
+                        );
+                        Ok(Some((wire.header, wire.payload, addr)))
                     }
-                    debug!(
-                        "RX seq={} from {} ({} bytes)",
-                        wire.header.sequence, addr, n
-                    );
-                    Ok(Some((wire.header, wire.payload, addr)))
+                    Err(e) => {
+                        warn!(
+                            "Received {} bytes from {} but deserialization failed: {}",
+                            n, addr, e
+                        );
+                        // Log a short hex preview (first up to 64 bytes) to help identify garbage/format.
+                        let preview_len = std::cmp::min(n, 64);
+                        warn!(
+                            "Packet preview (first {} bytes): {:02x?}",
+                            preview_len,
+                            &buf[..preview_len]
+                        );
+                        Ok(None)
+                    }
                 }
-                None => {
-                    warn!(
-                        "Received {} bytes from {} but deserialization failed",
-                        n, addr
-                    );
-                    Ok(None)
-                }
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || recv_transient_os_noise(e) => Ok(None),
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || recv_transient_os_noise(e) => {
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }

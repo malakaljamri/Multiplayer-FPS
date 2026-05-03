@@ -42,6 +42,7 @@ pub const WEAPON_COOLDOWN_TICKS: u32 = 30;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerState {
     pub id: u32,
+    pub name: [u8; 24],
     pub x: f32,
     pub y: f32,
     pub angle: f32,
@@ -171,6 +172,20 @@ pub fn serialize(packet: &WirePacket) -> Option<Vec<u8>> {
 pub fn deserialize(bytes: &[u8]) -> Option<WirePacket> {
     bincode::deserialize(bytes).ok()
 }
+pub fn encode_name(name: &str) -> [u8; 24] {
+    let mut buf = [0u8; 24];
+    let bytes = name.as_bytes();
+
+    let len = bytes.len().min(24);
+    buf[..len].copy_from_slice(&bytes[..len]);
+
+    buf
+}
+
+pub fn decode_name(buf: &[u8; 24]) -> &str {
+    let s = std::str::from_utf8(buf).unwrap_or("");
+    s.trim_end_matches('\0')
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -291,6 +306,7 @@ mod tests {
                         id: 1,
                         x: 1.0,
                         y: 2.0,
+                        name: [0; 24],
                         angle: 0.5,
                         frags: 0,
                         health: 100,
@@ -300,6 +316,7 @@ mod tests {
                         id: 2,
                         x: 5.0,
                         y: 3.0,
+                        name: [0; 24],
                         angle: 1.2,
                         frags: 0,
                         health: 80,

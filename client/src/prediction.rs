@@ -24,6 +24,7 @@ impl PredictionLocal {
                 id: 0,
                 x: 0.0,
                 y: 0.0,
+                name: [0; 24],
                 angle: 0.0,
                 health: 100,
                 frags: 0,
