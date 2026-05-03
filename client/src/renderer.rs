@@ -512,16 +512,16 @@ impl Renderer {
         }
 
         for rp in remote_players {
-            draw_circle(ox + rp.x*cell, oy + rp.y*cell, (cell*1.2).max(2.0), RED);
+            draw_circle(ox + rp.x*cell, oy + rp.y*cell, (cell*0.8), RED);
         }
 
         let px = ox + local.x * cell;
         let py = oy + local.y * cell;
-        draw_circle(px, py, (cell*1.4).max(2.5), GREEN);
+        draw_circle(px, py, (cell*1.0).max(2.5), GREEN);
         draw_line(px, py,
-            px + local.angle.cos() * cell * 2.5,
-            py + local.angle.sin() * cell * 2.5,
-            1.5, LIME);
+            px + local.angle.cos() * cell * 2.0,
+            py + local.angle.sin() * cell * 2.0,
+            1.5, BLACK);
 
         draw_rectangle_lines(ox-2.0, oy-2.0, mm_w+4.0, mm_h+4.0, 1.5, DARKGRAY);
     }
