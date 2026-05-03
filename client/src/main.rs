@@ -395,7 +395,7 @@ async fn run_session() -> GameLoopControl {
                 player_last_shot = Instant::now();
                 if let Some(map_ref) = prediction.map.as_ref() {
                     let angle = prediction.local_state.angle;
-                    if let Some((cx, cy, hys, wf)) = cast_ray_hit(
+                    if let Some((cx, cy, hys, wf, step_x, step_y)) = cast_ray_hit(
                         prediction.local_state.x,
                         prediction.local_state.y,
                         angle,
@@ -409,6 +409,8 @@ async fn run_session() -> GameLoopControl {
                             cell_y: cy,
                             hit_y_side: hys,
                             wall_frac: wf,
+                            step_x,
+                            step_y,
                         });
                     }
                 }

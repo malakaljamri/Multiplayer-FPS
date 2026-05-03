@@ -118,7 +118,7 @@ pub fn cast_hitscan_ray(px: f32, py: f32, angle: f32, map: &Map) -> f32 {
 /// Casts a ray and returns info about the wall hit:
 /// `(cell_x, cell_y, hit_y_side, wall_frac)` where `wall_frac` is 0..1
 /// along the face of the struck wall tile.  Returns `None` if no wall is hit.
-pub fn cast_ray_hit(px: f32, py: f32, angle: f32, map: &Map) -> Option<(i32, i32, bool, f32)> {
+pub fn cast_ray_hit(px: f32, py: f32, angle: f32, map: &Map) -> Option<(i32, i32, bool, f32, i32, i32)> {
     let rdx = angle.cos();
     let rdy = angle.sin();
 
@@ -166,7 +166,7 @@ pub fn cast_ray_hit(px: f32, py: f32, angle: f32, map: &Map) -> Option<(i32, i32
                 let hit = px + perp * rdx;
                 hit - hit.floor()
             };
-            return Some((mx, my, hit_y, wall_frac));
+            return Some((mx, my, hit_y, wall_frac, step_x, step_y));
         }
     }
     None
