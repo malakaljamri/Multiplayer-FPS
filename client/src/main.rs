@@ -342,10 +342,14 @@ async fn run_session() -> GameLoopControl {
                 let _ = socket.send_packet(Packet::Respawn, &server_addr);
             }
             if is_key_pressed(KeyCode::Q) || is_key_pressed(KeyCode::Escape) {
+                // Send disconnect packet to server before returning to lobby
+                let _ = socket.send_packet(Packet::Disconnect, &server_addr);
                 return GameLoopControl::Restart;
             }
         } else {
             if is_key_pressed(KeyCode::Q) || is_key_pressed(KeyCode::Escape) {
+                // Send disconnect packet to server before exiting
+                let _ = socket.send_packet(Packet::Disconnect, &server_addr);
                 return GameLoopControl::Exit;
             }
             if is_key_pressed(KeyCode::Tab)
