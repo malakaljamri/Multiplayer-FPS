@@ -1145,7 +1145,7 @@ fn draw_game_over_overlay() {
         Color::new(0.85, 0.85, 0.85, 1.0),
     );
 
-    let instr3 = "Press Q or Esc to quit";
+    let instr3 = "Press Esc to quit";
     let i3w = measure_text(instr3, None, 16, 1.0).width;
     draw_text(
         instr3,
