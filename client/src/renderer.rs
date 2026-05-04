@@ -512,7 +512,9 @@ impl Renderer {
         }
 
         for rp in remote_players {
-            draw_circle(ox + rp.x*cell, oy + rp.y*cell, (cell*0.8), RED);
+            if rp.health > 0 {
+                draw_circle(ox + rp.x*cell, oy + rp.y*cell, (cell*0.8), RED);
+            }
         }
 
         let px = ox + local.x * cell;
