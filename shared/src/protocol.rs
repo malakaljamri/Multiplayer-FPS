@@ -141,6 +141,9 @@ pub enum Packet {
     },
     /// Client → Server: request to respawn after death.
     Respawn,
+
+    /// Server → Client: game over, all players disconnected.
+    GameOver,
 }
 
 // ---------------------------------------------------------------------------

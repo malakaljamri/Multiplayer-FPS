@@ -468,6 +468,12 @@ async fn run_session() -> GameLoopControl {
                 Ok(Some((_, Packet::ServerMessage { text }, _))) => {
                     messages.push(text);
                 }
+                Ok(Some((_, Packet::GameOver, _))) => {
+                    messages.push("=== GAME OVER - Returning to lobby ===".to_string());
+                    // Return to lobby after a brief delay
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    return GameLoopControl::Restart;
+                }
                 Ok(Some((_, Packet::Pong, _))) => {}
                 Ok(Some(_)) | Ok(None) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use rand::Rng;
+
 use shared::maze::{Difficulty, Map};
 use shared::physics::{apply_input, cast_hitscan_ray, ray_intersects_circle};
 use shared::protocol::{
@@ -51,6 +53,8 @@ pub struct GameState {
     pub total_frags: u32,
     /// Set when a level advance is triggered; cleared by the server loop.
     pub pending_level_change: Option<LevelChangePending>,
+    /// Set when game is over (winner declared); triggers full reset and user drop.
+    pub pending_game_reset: bool,
 }
 
 impl GameState {
@@ -80,6 +84,7 @@ impl GameState {
             level: 1,
             total_frags: 0,
             pending_level_change: None,
+            pending_game_reset: false,
         }
     }
 
@@ -270,6 +275,8 @@ impl GameState {
                                 "🎉 CONGRATULATIONS! {} is the last one standing! 🎉",
                                 winner.name
                             ));
+                            // Trigger game reset to drop all users
+                            self.pending_game_reset = true;
                         }
 
                         // Check level advancement
@@ -331,6 +338,20 @@ impl GameState {
                 self.players.insert(id, p);
             }
         }
+    }
+
+    /// Reset the game state after game over - clears all players and resets level.
+    pub fn reset_game(&mut self) {
+        self.players.clear();
+        self.tick = 0;
+        self.level = 1;
+        self.total_frags = 0;
+        self.seed = rand::thread_rng().gen();
+        self.difficulty = Difficulty::Easy;
+        self.map = Map::generate(self.seed, self.difficulty);
+        self.pending_level_change = None;
+        self.pending_game_reset = false;
+        self.message_queue.push("=== NEW GAME STARTED! ===".to_string());
     }
 
     /// Advance the tick counter.

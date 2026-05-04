@@ -181,6 +181,19 @@ fn main() {
                 }
             }
 
+            // ---- 4b. Handle game over and reset ----
+            if game.pending_game_reset {
+                info!("Game over - dropping all players and resetting");
+                // Send GameOver packet to all connected clients
+                for addr in &addrs {
+                    let _ = socket.send_packet(Packet::GameOver, *addr);
+                }
+                // Drop all connected users
+                addr_to_id.clear();
+                // Reset game state
+                game.reset_game();
+            }
+
             // ---- 5. Broadcast state snapshot ----
             let snapshot = game.snapshot();
             let state_packet = Packet::StateSnapshot {
