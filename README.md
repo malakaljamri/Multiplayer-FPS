@@ -2,6 +2,8 @@
 
 A multiplayer first-person shooter inspired by **Maze Wars**, built in Rust with a client–server architecture over UDP.
 
+![alt text](image.png)
+
 ## Architecture
 
 | Crate    | Description                                  |
